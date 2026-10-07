@@ -38,7 +38,6 @@ concurrency:
 
 env:
   FLUTTER_VERSION: '3.47.5'
-  RELEASE_TAG: ''
 
 jobs:
   build:
@@ -105,9 +104,19 @@ jobs:
       - name: Install Android SDK packages
         if: steps.gate.outputs.build == 'true'
         run: |
+          set -euo pipefail
           SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
           yes | "${SDKMANAGER}" --licenses > /dev/null 2>&1 || true
-          "${SDKMANAGER}" "platforms;android-37" "build-tools;36.0.0" "ndk;28.2.13676358"
+          # Android publishes minor-versioned platforms under a dotted name
+          # ("android-37.0", API level 37.0) while AGP still looks the SDK up as
+          # "android-37". Installing the former without the symlink fails with
+          # "Failed to find target with hash string 'android-37'".
+          "${SDKMANAGER}" "platforms;android-37.0" "platforms;android-36" \
+            "build-tools;36.0.0" "ndk;28.2.13676358"
+          if [ ! -e "${ANDROID_HOME}/platforms/android-37" ]; then
+            ln -s "${ANDROID_HOME}/platforms/android-37.0" "${ANDROID_HOME}/platforms/android-37"
+          fi
+          ls "${ANDROID_HOME}/platforms"
 
       # --------------------------------------------------------------- signing
       #
