@@ -2,6 +2,7 @@ package com.nexradar.app
 
 import android.app.Application
 import android.content.Context
+import android.os.Build
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.dart.DartExecutor
 
@@ -30,6 +31,18 @@ class NexRadarApplication : Application() {
     @Volatile
     private var engine: FlutterEngine? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        // The first line of every session. After a silent background death, the
+        // distance between this timestamp and the last heartbeat in the file is
+        // the entire answer to "how long did it keep working?".
+        DiagLog.beginSession(
+            this,
+            "process ${android.os.Process.myPid()} · " +
+                "${Build.MANUFACTURER} ${Build.MODEL} · API ${Build.VERSION.SDK_INT}",
+        )
+    }
+
     /** Creates the engine on first use and runs `main()` exactly once. */
     fun flutterEngine(): FlutterEngine = engine ?: synchronized(this) {
         engine ?: createEngine().also { engine = it }
@@ -40,6 +53,8 @@ class NexRadarApplication : Application() {
         // Channels are wired to the engine, not to an activity, so a method call
         // from Dart works even with no UI on screen.
         NexRadarChannels.wire(created, applicationContext)
+        NexRadarDiagnostics.wire(created, applicationContext)
+        DiagLog.event(applicationContext, "engine", "dart entrypoint started")
         created.dartExecutor.executeDartEntrypoint(
             DartExecutor.DartEntrypoint.createDefault(),
         )

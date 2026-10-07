@@ -44,6 +44,10 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
     private var scale = 1f
     private var showRemaining = true
 
+    /** Whether this host's own window is on screen right now. */
+    @Volatile
+    private var bubbleAttached = false
+
     /** Last known payload, so the notification can be refreshed on demand. */
     @Volatile
     private var lastPayload: Map<String, Any?> = emptyMap()
@@ -62,6 +66,7 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         startForegroundCompat(buildNotification())
         instance = this
         isRunning = true
+        DiagLog.event(this, "service", "foreground started")
 
         // Make sure the Dart isolate is up. Normally it already is — the engine
         // is owned by the application — but after a process death Android
@@ -84,6 +89,10 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
         Log.i(TAG, "task removed — bubble stays up")
+        DiagLog.event(this, "service", "task swiped away")
+        // Re-assert immediately from the service itself, so the record shows the
+        // bubble was still alive at the instant the driver closed the app.
+        DiagLog.heartbeat(this, "service alive after task removal")
         if (OverlayBus.overlayDesired) {
             runCatching {
                 startForegroundService(Intent(this, RadarOverlayService::class.java))
@@ -165,13 +174,18 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         host.applyScale(scale)
         host.pushState(mapOf("showRemaining" to showRemaining))
         host.attach()
+        bubbleAttached = host.attached
         if (!host.attached) {
             Log.w(TAG, "overlay window refused; is SYSTEM_ALERT_WINDOW granted?")
+            DiagLog.event(this, "overlay", "window refused — grant missing?")
+        } else {
+            DiagLog.event(this, "overlay", "window attached")
         }
     }
 
     private fun detachBubble() {
         window?.detach()
+        bubbleAttached = false
     }
 
     private fun applyPayload(payload: Map<String, Any?>) {
@@ -388,7 +402,9 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         detachBubble()
         window = null
         isRunning = false
+        bubbleAttached = false
         instance = null
+        DiagLog.event(this, "service", "stopped")
         Log.i(TAG, "overlay service stopped")
         super.onDestroy()
     }
@@ -413,6 +429,9 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         @Volatile
         var instance: RadarOverlayService? = null
             private set
+
+        /** True while this service's own overlay window is drawing. */
+        fun isBubbleAttached(): Boolean = instance?.bubbleAttached == true
 
         /**
          * Pushes a state payload straight into whichever host is drawing.

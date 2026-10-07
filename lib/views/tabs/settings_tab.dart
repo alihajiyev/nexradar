@@ -12,6 +12,7 @@ import '../../ui/widgets/controls.dart';
 import '../../ui/widgets/setting_tiles.dart';
 import '../../ui/widgets/surfaces.dart';
 import '../../ui/widgets/update_card.dart';
+import '../diagnostics_screen.dart';
 
 /// Settings, grouped by the question the driver is asking rather than by the
 /// implementation: sound, display, detection, overlay, community, data.
@@ -499,6 +500,32 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                         if (!mounted) return;
                         _notify('Yerli keş təmizləndi');
                       },
+                    ),
+                  ),
+                ],
+              ),
+
+              // ------------------------------------------------- diagnostics
+              const SectionHeader(title: 'Diaqnostika'),
+              SettingGroup(
+                title: 'Arxa fonun sağlamlığı',
+                footer: 'Servis, kilid ekranı hostu, GPS axını, yol koridoru və '
+                    'son anonslar canlı göstərilir. Arxa fon dayananda səbəbi '
+                    'burada görünür.',
+                children: <Widget>[
+                  SettingTile(
+                    icon: Icons.monitor_heart_outlined,
+                    title: 'Diaqnostika ekranı',
+                    subtitle: 'Canlı vəziyyət və uçuş qeydi',
+                    accent: NexColors.cyan,
+                    trailing: const Icon(
+                      Icons.chevron_right_rounded,
+                      color: NexColors.textLow,
+                    ),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => DiagnosticsScreen(services: services),
+                      ),
                     ),
                   ),
                 ],

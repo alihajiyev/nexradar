@@ -9,12 +9,14 @@ import '../constants/app_constants.dart';
 import '../constants/camera_types.dart';
 import '../database/camera_repository.dart';
 import '../location/approach_ladder.dart';
+import '../location/average_speed_tracker.dart';
 import '../location/heading_calculator.dart';
 import '../location/location_service.dart';
 import '../location/route_corridor.dart';
 import '../location/speed_interpolator.dart';
 import 'alert_service.dart';
 import 'crowdsourced_radar_service.dart';
+import 'diagnostics_service.dart';
 import 'osm_sync_service.dart';
 import 'overlay_service.dart';
 import 'settings_service.dart';
@@ -76,6 +78,10 @@ class RadarEngine {
   /// radar on my road" test. See [RouteCorridor].
   final RouteCorridor corridor = RouteCorridor();
 
+  /// Average-speed sections, measured from the moment the entry marker is
+  /// passed. See [AverageSpeedTracker].
+  final AverageSpeedTracker averageSpeed = AverageSpeedTracker();
+
   StreamSubscription<Position>? _positionSub;
   Timer? _communityTimer;
   Timer? _pump;
@@ -107,6 +113,39 @@ class RadarEngine {
   /// (and a later revisit re-announces).
   final Map<String, double> _lastDistance = <String, double>{};
 
+  // -------------------------------------------------------------- diagnostics
+  //
+  // Deliberately plain fields rather than notifiers: the diagnostics screen
+  // polls, and nothing else renders them. They exist so a driver who reports
+  // "it stopped working" can be answered with numbers instead of a guess.
+
+  DateTime? _lastFixAt;
+  DateTime? _sessionStarted;
+  DateTime _lastRecordedHeartbeat = DateTime.fromMillisecondsSinceEpoch(0);
+  AnnouncementRecord? _lastAnnouncement;
+  int _announcements = 0;
+  int _camerasInRange = 0;
+  int _forwardThreatCount = 0;
+  int _filteredOffRoute = 0;
+
+  AverageSpeedReading? _averageReading;
+  DateTime _lastSectionWarnAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// The running average of the section the driver is inside, or null when he is
+  /// not inside one (or when there is not enough of it behind him yet).
+  AverageSpeedReading? get averageReading => _averageReading;
+
+  /// How often the pipeline proves to the flight recorder that it is alive.
+  static const Duration heartbeatInterval = Duration(seconds: 30);
+
+  DateTime? get lastFixAt => _lastFixAt;
+  DateTime? get sessionStarted => _sessionStarted;
+  AnnouncementRecord? get lastAnnouncement => _lastAnnouncement;
+  int get announcements => _announcements;
+  int get camerasInRange => _camerasInRange;
+  int get forwardThreatCount => _forwardThreatCount;
+  int get filteredOffRoute => _filteredOffRoute;
+
   DateTime _lastOverlayPush = DateTime.fromMillisecondsSinceEpoch(0);
   String _lastPushedSignature = '';
 
@@ -118,7 +157,9 @@ class RadarEngine {
   Future<void> start({bool background = true}) async {
     if (_running) return;
     _running = true;
+    _sessionStarted = DateTime.now();
     _appendLog('Mühərrik işə salındı');
+    Diag.event('engine', 'started (background: $background)');
 
     _positionSub = locationService.positions(background: background).listen(
       _onPosition,
@@ -154,10 +195,13 @@ class RadarEngine {
     _pump?.cancel();
     _pump = null;
     corridor.reset();
+    averageSpeed.leave();
+    _averageReading = null;
     await tts.stop();
     await alerts.stopAll();
     await overlay.hide();
     _appendLog('Mühərrik dayandırıldı');
+    Diag.event('engine', 'stopped after $_announcements announcements');
   }
 
   // -------------------------------------------------------------- GPS intake
@@ -205,6 +249,8 @@ class RadarEngine {
       camerasInRange: _cache.length,
     );
 
+    _lastFixAt = DateTime.now();
+    _camerasInRange = _cache.length;
     interpolator.setTarget(kmh);
     if (!_hadFix) {
       // First fix: jump straight to the value, no sweep from zero.
@@ -217,6 +263,7 @@ class RadarEngine {
     state.value = next.copyWith(speedKmh: interpolator.current);
 
     _evaluateAlerts(state.value);
+    _updateAverageSection();
     await _maybePushToOverlay(force: true);
   }
 
@@ -309,6 +356,7 @@ class RadarEngine {
     required double heading,
   }) {
     final List<SpeedCamera> out = <SpeedCamera>[];
+    _filteredOffRoute = 0;
     for (final SpeedCamera c in _cache) {
       final double? d = c.distanceMeters;
       if (d == null) continue;
@@ -326,6 +374,7 @@ class RadarEngine {
       );
       if (!ahead) continue;
       if (!corridor.isOnRoute(latitude: c.latitude, longitude: c.longitude)) {
+        _filteredOffRoute += 1;
         continue;
       }
       out.add(c);
@@ -333,6 +382,7 @@ class RadarEngine {
     out.sort((SpeedCamera a, SpeedCamera b) =>
         (a.distanceMeters ?? double.infinity)
             .compareTo(b.distanceMeters ?? double.infinity));
+    _forwardThreatCount = out.length;
     return out;
   }
 
@@ -361,10 +411,42 @@ class RadarEngine {
     final double? crossed =
         ApproachLadder.crossedGate(previous: previous, distance: distance);
 
+    // An average-speed marker starts a section when it goes *behind* the car,
+    // not when it appears ahead: the clock must not include the approach.
+    if (camera.type == CameraType.averageSpeed && !closing) {
+      final bool opened = averageSpeed.enter(
+        cameraKey: camera.identityKey,
+        limitKmh: camera.maxSpeed,
+        at: DateTime.now(),
+        trackMeters: corridor.trackMeters,
+      );
+      if (opened) {
+        _appendLog('Orta sürət bölməsi başladı · hədd ${camera.maxSpeed}');
+        Diag.event('section', 'entered · limit ${camera.maxSpeed}');
+      }
+    }
+
     // --- voice ladder --------------------------------------------------------
     if (crossed != null && settings.voiceEnabled) {
       _appendLog('${camera.type.wire} radar ${distance.round()} m '
           '— hədd ${camera.maxSpeed}');
+      final String text = camera.isTemporary
+          ? 'Topluluk radarı, hədd $camera.maxSpeed'
+          : '$camera.type.labelTr radar, hədd $camera.maxSpeed';
+
+      _lastAnnouncement = AnnouncementRecord(
+        at: DateTime.now(),
+        text: text,
+        distanceMeters: crossed,
+      );
+      _announcements += 1;
+      // The flight recorder gets the *gate*, not the current distance: that is
+      // the whole claim of the ladder, and it is what a support report verifies.
+      Diag.event(
+        'announce',
+        '${crossed.round()} m · ${camera.type.wire} · '
+            'limit ${camera.maxSpeed} · fx ${distance.round()} m',
+      );
       if (ApproachLadder.isUrgent(crossed)) {
         unawaited(
           tts.announceSlowDown(
@@ -404,6 +486,40 @@ class RadarEngine {
     }
   }
 
+  /// Samples the running section average and warns when it goes over the limit.
+  ///
+  /// The warning is rate-limited by [AppConstants.averageSectionWarnCooldown]
+  /// because an average is a slow number: it stays over the limit for minutes,
+  /// and repeating the sentence would be noise rather than help.
+  void _updateAverageSection() {
+    _averageReading = averageSpeed.sample(
+      trackMeters: corridor.trackMeters,
+      now: DateTime.now(),
+    );
+
+    final AverageSpeedReading? reading = _averageReading;
+    if (reading == null || !reading.isOver) return;
+    if (!settings.voiceEnabled) return;
+
+    final DateTime now = DateTime.now();
+    if (now.difference(_lastSectionWarnAt) <
+        AppConstants.averageSectionWarnCooldown) {
+      return;
+    }
+    _lastSectionWarnAt = now;
+    Diag.event(
+      'section',
+      'average ${reading.averageLabel} km/s over limit ${reading.limitKmh} '
+          '· ${reading.drivenLabel} · ${reading.elapsedLabel}',
+    );
+    unawaited(
+      tts.announceSectionAverage(
+        averageKmh: reading.averageKmh.round(),
+        limitKmh: reading.limitKmh,
+      ),
+    );
+  }
+
   // --------------------------------------------------------------- 60 FPS sim
 
   /// Advances everything that is time-based: the needle interpolation and the
@@ -421,6 +537,17 @@ class RadarEngine {
     final double dt = now.difference(_lastTickAt).inMicroseconds / 1000000.0;
     if (dt <= 0) return;
     _lastTickAt = now;
+
+    // Prove to the flight recorder that the pipeline is alive even when nobody
+    // is looking at the screen. A missing heartbeat is how a dead background is
+    // detected on the next launch.
+    if (now.difference(_lastRecordedHeartbeat) >= heartbeatInterval) {
+      _lastRecordedHeartbeat = now;
+      Diag.heartbeat(
+        'fx ${state.value.speedKmh.round()} km/s · radar ${_cache.length} · '
+        'yol ${corridor.trackMeters.round()} m',
+      );
+    }
 
     interpolator.advance(dt);
 

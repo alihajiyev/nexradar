@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../core/location/average_speed_tracker.dart';
 import '../../core/services/crowdsourced_radar_service.dart';
 import '../../core/services/osm_sync_service.dart';
 import '../../core/services/radar_engine.dart';
@@ -156,6 +157,10 @@ class _DriveTabState extends State<DriveTab> {
               _GaugeCard(services: services, state: state),
               const SizedBox(height: NexSpace.sm),
               _ThreatPanel(services: services, state: state),
+              if (engine.averageReading != null) ...<Widget>[
+                const SizedBox(height: NexSpace.sm),
+                _SectionCard(reading: engine.averageReading!),
+              ],
               const SizedBox(height: NexSpace.md),
               _PrimaryAction(
                 running: engine.isRunning,
@@ -345,6 +350,98 @@ class _GaugeCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
+
+/// The average-speed section the driver is inside right now.
+///
+/// This panel exists because a section camera judges a number the speedometer
+/// never shows: the average since the entry marker. A driver watching only the
+/// needle cannot know he is about to be fined for a fast first kilometre, so the
+/// panel shows exactly what the camera on the far side will print.
+class _SectionCard extends StatelessWidget {
+  const _SectionCard({required this.reading});
+
+  final AverageSpeedReading reading;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color tone = reading.isOver ? NexColors.danger : NexColors.cyan;
+
+    return NexCard(
+      accent: tone,
+      tintStrength: 0.07,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              NexIconBadge(
+                icon: reading.isOver
+                    ? Icons.trending_up_rounded
+                    : Icons.timeline_outlined,
+                color: tone,
+                size: 40,
+              ),
+              const SizedBox(width: NexSpace.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text('Orta sürət bölməsi', style: NexText.bodyStrong),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Bölməyə girəndən bəri '
+                      '${reading.drivenLabel} · ${reading.elapsedLabel}',
+                      style: NexText.caption,
+                    ),
+                  ],
+                ),
+              ),
+              StatusPill(
+                label: 'HƏDD ${reading.limitKmh}',
+                color: NexColors.amber,
+                dense: true,
+              ),
+            ],
+          ),
+          const SizedBox(height: NexSpace.sm),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: <Widget>[
+              Text(
+                reading.averageLabel,
+                style: NexText.h1.copyWith(fontSize: 30, color: tone),
+              ),
+              const SizedBox(width: 5),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 5),
+                child: Text('km/s ortalama', style: NexText.caption),
+              ),
+              const Spacer(),
+              if (reading.isOver)
+                StatusPill(
+                  label: '+${reading.overByKmh.round()}',
+                  color: NexColors.danger,
+                  icon: Icons.error_outline_rounded,
+                )
+              else
+                StatusPill(
+                  label: '${reading.headroomKmh.round()} km/s ehtiyat',
+                  color: NexColors.primary,
+                  icon: Icons.check_circle_outline_rounded,
+                  dense: true,
+                ),
+            ],
+          ),
+          const SizedBox(height: NexSpace.xs),
+          NexProgressRail(
+            value: (reading.averageKmh / (reading.limitKmh * 1.4)).clamp(0.0, 1.0),
+            color: tone,
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _ThreatPanel extends StatelessWidget {
   const _ThreatPanel({required this.services, required this.state});

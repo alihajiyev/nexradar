@@ -140,6 +140,51 @@ cəmi ~4° kənara düşür və konusun içində qalır — halbuki sürücü o 
 Ehtiyatlı tərəfdədir: iz hələ qısadırsa (`< 60 m`) koridor **fikir bildirmir** və radar
 saxlanılır. Real radarı itirmək, artıq birini saxlamaqdan qat-qat pisdir.
 
+### Orta sürət bölmələri — bir nöqtə deyil, ortalama
+
+Bölmə kamerası anda olan sürəti ölçmür: iki marker arasındakı **məsafəni vaxta bölür**.
+Ona görə də sürücünün qarşısındakı rəqəm spidometrdə heç vaxt görünmür —
+`average_speed_tracker.dart` məhz o rəqəmi hesablayır:
+
+* **Odometr koridordan gəlir.** Düz xətt məsafəsi döngəli bölmədə az çıxır, az məsafə
+  isə eyni vaxtda **daha aşağı** ortalama kimi görünür — sürücü cərimə yeyərkən
+  "hər şey qaydasındadır" cavabı alardı. Odur ki, həqiqətən sürülən xətt ölçülür.
+* **Saat marker *keçiləndə* başlayır.** Markera yaxınlaşma bölmənin içi deyil; onu da
+  saymaq ortalamanı süni şəkildə aşağı salardı.
+* Nəticə `Orta sürət bölməsi` kartında canlı göstərilir: ortalama, sürülən məsafə,
+  keçən vaxt, həddən artıq olan fərq və ya qalan ehtiyat. limitdən yuxarı olduqda
+  səsli xəbərdarlıq gedir (30 saniyəlik soyutma ilə — ortalama yavaş dəyişən rəqəmdir,
+  təkrar danışmaq kömək deyil, səs-küydür).
+* Bölmənin **çıxışı yoxdur**: OSM bir node verir, uydurma çıxış isə saxta "orta sürəti
+  tut" rəqəmi yaradardı. Buna görə bölmə 1200 m-dən sonra avtomatik bağlanır.
+
+### Diaqnostika və uçuş qeydi — "işləmirsə, niyə?"
+
+Arxa fonun sükutla dayanması sürücünün verə biləcəyi yeganə cavabı mənasız edir:
+"işləmir". Ona görə bütün diqqətəlayiq hadisələr **hər iki təbəqədən** (Kotlin servisi,
+kilid ekranı hostu, Dart radar boru xətti) `filesDir/session.log` faylına yazılır və
+boru xətti işlədiyi müddətdə 30 saniyədən bir **ürək döyüntüsü** qeyd olunur:
+
+```
+1791388051206|15:47:31|boot|process 9126 · Google sdk_gphone64_x86_64 · API 36
+1791388054110|15:47:34|engine|started (background: true)
+1791388054216|15:47:34|hb|fx 0 km/s · radar 0 · yol 0 m
+1791388054269|15:47:34|service|foreground started
+1791388054302|15:47:34|overlay|window attached
+```
+
+Növbəti açılışda bu fayl **tək sualı** cavablandırır: *"Mən çıxandan nə qədər sonra
+həqiqətən öldü?"* — `summariseSession()` son ürək döyüntüsü ilə indiki vaxt arasındakı
+fərqi oxuyur və `Diaqnostika` ekranı yuxarıda bir cümlə ilə göstərir.
+
+`NexRadarDiagnostics` kanalı isə sistemdən **heç nəyi təxmin etmədən** soruşur: servis
+işləyirmi, baloncuğu hansı host çəkir, kilid ekranı icazəsi varmı, bildirişlər açıqdırmı,
+batareya optimallaşdırması və **doze standby bucket** nədir, son konum neçə saniyə
+əvvəl gəldi, neçə radar kameraya düşdü, koridor neçə radarı başqa yolda sayıb atdı və
+son anons hansı qapıda oldu. Ekrandakı hər maneə toxunula bilir və düzgün sistem
+səhifəsini açır — çünki bunların hamısı sükutla baş verir və "tətbiq xarab olub"
+kimi görünür.
+
 ---
 
 ## 3. UI / UX & dizayn sistemi
@@ -328,7 +373,7 @@ həmin versiya üçün GitHub Release yoxdursa APK-nı derləyib `v<sürüm>` te
 
 ```bash
 # Yeganə addım: versiyanı qaldır və push et
-#   pubspec.yaml: version: 1.2.0+4
+#   pubspec.yaml: version: 1.3.0+4
 git commit -am "chore: bump version"
 git push
 ```
@@ -361,8 +406,8 @@ yoxdursa build Flutter şablonunun debug açarına düşür (`android/app/build.
 
 ## 8. Testlər
 
-`test/widget_test.dart` + `test/update_service_test.dart` + `test/route_and_alerts_test.dart` —
-63 test, hamısı pluginsiz işləyir:
+`test/widget_test.dart` + `test/update_service_test.dart` + `test/route_and_alerts_test.dart` +
+`test/diagnostics_and_sections_test.dart` — **100 test**, hamısı pluginsiz işləyir:
 
 
 * Haversine məsafə + bearing (4 kardinal istiqamət)
@@ -384,6 +429,15 @@ yoxdursa build Flutter şablonunun debug açarına düşür (`android/app/build.
   "fikir bildirmirəm" ehtiyatlılığı.
 * **`HeadingCalculator`**: seqmentə perpendikulyar məsafə və `destination()` — koridorun
   həndəsəsi.
+* **`AverageSpeedTracker`**: orta sürətin düzgün hesablanması (1000 m / 36 s = 100 km/s),
+  sübut yoxdursa susma, 0.5 km/s toleransın cərimə sayılmaması, bölmənin 1200 m-də
+  bağlanması, eyni kamera üçün saatın bir dəfə başlaması.
+* **Uçuş qeydi**: sətir formatının parse edilməsi (pozan girişi atır, yıxılmır),
+  `summariseSession()` — heç vaxt başlamamış, sağlam, gecikmiş və **42 dəqiqə əvvəl
+  ölmüş** arxa fonun fərqləndirilməsi.
+* **`NativeDiagnostics`**: maneələrin düzgün sırası (konum → üzərdə göstərmə → bildiriş →
+  batareya → bucket), `RESTRICTED_BUCKET (45)` aşkarlanması və host adının sürücü
+  dilinə çevrilməsi.
 
 `test/design_test.dart` — 6 **layout təhlükəsizliyi** testi: hər kompozisiya 390×844-də
 render olunur və hər hansı `RenderFlex` daşması testi düşürür. Səthlərdən biri
@@ -403,10 +457,52 @@ flutter test --exclude-tags golden                    # CI-ın işlətdiyi dəst
 
 ---
 
-## 9. Yol xəritəsi
+## 9. Saha testi — real Android 16 (API 36) cihazında
 
+Bu sürüm yalnız unit testlərlə deyil, **real sistem imicində** yoxlanıldı
+(`system-images;android-36;google_apis;x86_64`, Pixel 6 profili, release APK).
+Lokal SDK `emulator` + AVD elle quruldu, APK `adb install` ilə yazıldı, icazələr
+`pm grant` / `appops`, kilid ekranı hostu `settings put secure` ilə verildi.
+
+**Təsdiqlənənlər (cihaz çıxışı):**
+
+| Yoxlama | Nəticə |
+|---|---|
+| Release APK quraşdırılması | `Performing Streamed Install → Success` |
+| Baloncuk pəncərəsi | `Window{... u0 com.nexradar.app} appop=SYSTEM_ALERT_WINDOW` |
+| Foreground servis | `RadarOverlayService isForeground=true types=0x40000000`, bildiriş `vis=PUBLIC` |
+| Konum servisi | `GeolocatorLocationService isForeground=true types=0x00000008` |
+| Arxa fonda davamlılıq | `hb` sətirləri **hər 30 saniyə** gəldi, heç bir UI açıq olmadan |
+| Uçuş qeydi | `boot → engine → started(background: true) → service → overlay → hb` tam ardıcıllıq |
+| DB oxunması | `sqlite3` ilə bazaya 3 radar yazıldı, tətbiq həmin faylı istifadə etdi |
+
+Nümunə — cihazın özünün yazdığı jurnal:
+
+```
+1791388051206|15:47:31|boot|process 9126 · Google sdk_gphone64_x86_64 · API 36
+1791388051753|15:47:31|engine|dart entrypoint started
+1791388054110|15:47:34|engine|started (background: true)
+1791388054269|15:47:34|service|foreground started
+1791388054302|15:47:34|overlay|window attached
+1791388084315|15:48:04|hb|fx 0 km/s · radar 0 · yol 0 m
+1791388168324|15:49:28|hb|fx 0 km/s · radar 0 · yol 0 m
+```
+
+**Yoxlanıla bilməyənlər — dürüst qeyd:** imicin GNSS HAL-ı `adb emu geo fix`
+əmrini qəbul etsə də sistemə heç bir fix ötürmədi (`gps provider: locations = 0`),
+ona görə **GPS-dən asılı olan** hissə (1 km → 500 m → 200 m merdiveni, koridor
+filtri, orta sürət bölməsi) cihazda işə salına bilmədi; bunlar unit testlərlə
+(qapı keçmə qaydası, koridor həndəsəsi, ortalama hesablanması) qorunur.
+`enabled_accessibility_services` yazmaq da imicdə qüvvədə qalmadı, yəni
+kilid ekranı hostu cihazda təsdiqlənmədi.
+
+---
+
+## 10. Yol xəritəsi
+
+* Shizuku ilə sükutla yeniləmə (root olmadan `pm install`)
 * Android Auto / Wear OS bildirişi
-* Orta sürət (average speed) zonaları üçün giriş-çıxış cütləri
+* Orta sürət bölmələri üçün OSM `relation` dəstəyi (real giriş-çıxış cütləri)
 * Xəritədə radar heatmap + "yoldaş rejimi"
 * iOS portu (`CoreLocation` + `UIWindow` overlay; Dart tərəfi hazırdır)
 

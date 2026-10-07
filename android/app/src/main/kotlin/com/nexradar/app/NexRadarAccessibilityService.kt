@@ -29,6 +29,10 @@ class NexRadarAccessibilityService : AccessibilityService(), SpeedBubbleView.Lis
 
     private var window: BubbleWindow? = null
 
+    /** Whether the lock-screen host's own window is on screen right now. */
+    @Volatile
+    private var bubbleAttached = false
+
     // --------------------------------------------------------------- lifecycle
 
     override fun onServiceConnected() {
@@ -37,6 +41,7 @@ class NexRadarAccessibilityService : AccessibilityService(), SpeedBubbleView.Lis
         syncWindow()
         BubbleHost.refresh()
         OverlayBus.emit("lockHud", mapOf("active" to true))
+        DiagLog.event(this, "lockHud", "connected")
         Log.i(TAG, "lock-screen host connected")
     }
 
@@ -55,16 +60,20 @@ class NexRadarAccessibilityService : AccessibilityService(), SpeedBubbleView.Lis
         // A host that starts mid-drive must not show a blank dial for a second.
         OverlayBus.pendingState?.let { host.pushState(it) }
         host.attach()
+        bubbleAttached = host.attached
         if (host.attached) {
             Log.i(TAG, "bubble attached over the keyguard")
+            DiagLog.event(this, "lockHud", "bubble attached over the keyguard")
         } else {
             window = null
+            DiagLog.event(this, "lockHud", "window refused")
         }
     }
 
     private fun detach() {
         window?.detach()
         window = null
+        bubbleAttached = false
     }
 
     /** Feeds a payload into the lock-screen bubble. */
@@ -96,6 +105,7 @@ class NexRadarAccessibilityService : AccessibilityService(), SpeedBubbleView.Lis
         instance = null
         BubbleHost.refresh()
         OverlayBus.emit("lockHud", mapOf("active" to false))
+        DiagLog.event(this, "lockHud", "disconnected")
         Log.i(TAG, "lock-screen host gone")
     }
 
@@ -131,5 +141,8 @@ class NexRadarAccessibilityService : AccessibilityService(), SpeedBubbleView.Lis
 
         /** True while the accessibility host is alive and owns the bubble. */
         fun isConnected(): Boolean = instance != null
+
+        /** True while its own window is drawing — the "host wins" question. */
+        fun isBubbleAttached(): Boolean = instance?.bubbleAttached == true
     }
 }

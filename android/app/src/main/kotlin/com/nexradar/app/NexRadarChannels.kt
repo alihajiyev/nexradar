@@ -1,6 +1,5 @@
 package com.nexradar.app
 
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -245,11 +244,7 @@ object NexRadarChannels {
     private fun canOverlay(context: Context): Boolean = Settings.canDrawOverlays(context)
 
     private fun canInstallPackages(context: Context): Boolean =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.packageManager.canRequestPackageInstalls()
-        } else {
-            true
-        }
+        NexRadarDiagnostics.canInstallPackages(context)
 
     private fun overlaySettingsIntent(context: Context): Intent = Intent(
         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -268,25 +263,11 @@ object NexRadarChannels {
 
     /**
      * True when the driver has switched NexRadar on under Settings →
-     * Accessibility. Both switches matter: the per-service grant and the master
-     * toggle, because an off master toggle keeps the service unbound.
+     * Accessibility. Shared with the diagnostics screen so the two can never
+     * disagree about the same grant.
      */
-    private fun lockHudEnabled(context: Context): Boolean {
-        val master = Settings.Secure.getInt(
-            context.contentResolver,
-            Settings.Secure.ACCESSIBILITY_ENABLED,
-            0,
-        ) == 1
-        if (!master) return false
-
-        val expected = ComponentName(context, NexRadarAccessibilityService::class.java)
-        val enabled = Settings.Secure.getString(
-            context.contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-        ) ?: return false
-        return enabled.split(':')
-            .any { it.equals(expected.flattenToString(), ignoreCase = true) }
-    }
+    private fun lockHudEnabled(context: Context): Boolean =
+        NexRadarDiagnostics.lockHudEnabled(context)
 
     private fun asMap(arguments: Any?): Map<String, Any?> {
         val map = arguments as? Map<*, *> ?: return emptyMap()

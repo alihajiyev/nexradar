@@ -165,6 +165,23 @@ class TtsService {
     );
   }
 
+  /// Fired inside an average-speed section, where the instant speed is beside
+  /// the point: the camera divides distance by time, so the average is the number
+  /// that decides whether the driver is fined.
+  Future<void> announceSectionAverage({
+    required int averageKmh,
+    required int limitKmh,
+  }) {
+    return speak(
+      PhraseBook.sectionAverage(
+        _requestedLanguage,
+        averageKmh: averageKmh,
+        limitKmh: limitKmh,
+      ),
+      force: true,
+    );
+  }
+
   Future<void> announceCommunityReport({required int limitKmh}) {
     return speak(
       PhraseBook.communityReport(_requestedLanguage, limitKmh: limitKmh),
@@ -229,6 +246,24 @@ class PhraseBook {
         return 'Снизьте скорость, до камеры $d метров!';
       default:
         return 'Slow down, camera in $d meters!';
+    }
+  }
+
+  static String sectionAverage(
+    String language, {
+    required int averageKmh,
+    required int limitKmh,
+  }) {
+    switch (_lang(language)) {
+      case 'az':
+        return 'Orta sürət bölməsi! Ortalamanız $averageKmh, hədd $limitKmh.';
+      case 'tr':
+        return 'Ortalama hız bölümü! Ortalamanız $averageKmh, limit $limitKmh.';
+      case 'ru':
+        return 'Зона средней скорости! Ваша средняя $averageKmh при $limitKmh.';
+      default:
+        return 'Average speed zone! Your average is $averageKmh, '
+            'the limit is $limitKmh.';
     }
   }
 

@@ -8,7 +8,7 @@ class AppConstants {
   // ---------------------------------------------------------------- identity
   static const String appName = 'NexRadar';
   static const String appTagline = 'Arxa fonda işləyən radar & sürət HUD';
-  static const String appVersion = '1.2.0';
+  static const String appVersion = '1.3.0';
 
   // -------------------------------------------------------------- persistence
   static const String dbName = 'nex_radar.db';
@@ -156,6 +156,20 @@ class AppConstants {
   /// A course is only trusted once the track is at least this long: below it,
   /// the raw fix-to-fix heading is the better estimate.
   static const double routeCourseMinTrackMeters = 60.0;
+
+  // ---------------------------------------------------- average-speed sections
+  /// A section closes once the driver has driven this far past its entry marker.
+  /// OSM gives a section as a single node, so there is no real exit to wait for;
+  /// this is the point where keeping the clock running would be a lie.
+  static const double averageSectionMaxMeters = 1200.0;
+
+  /// The average is meaningless before this much of the section has been driven:
+  /// five seconds of GPS noise is not a speed.
+  static const double averageSectionMinMeters = 60.0;
+  static const int averageSectionMinSeconds = 8;
+
+  /// Do not nag about the same section average more often than this.
+  static const Duration averageSectionWarnCooldown = Duration(seconds: 30);
 
   // ----------------------------------------------------------------- geometry
   /// Meters per degree of latitude (good enough for city-scale filtering).
