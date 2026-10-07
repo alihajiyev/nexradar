@@ -242,7 +242,7 @@ flutter build apk --release \
 ```bash
 flutter pub get
 flutter analyze          # 0 issue
-flutter test             # 54 test (44 məntiq + 5 layout + 5 golden)
+flutter test             # 56 test (44 məntiq + 6 layout + 6 golden)
 
 # Release APK
 flutter build apk --release --dart-define=NEX_RADAR_REPO=alihajiyev/nexradar
@@ -326,10 +326,12 @@ yoxdursa build Flutter şablonunun debug açarına düşür (`android/app/build.
   `1.10.0 > 1.9.0` — sətir yox, ədəd müqayisəsi). GitHub cavabı `MockClient`,
   quraşdırılmış sürüm `nexradar/update` kanalının mock-u ilə verilir.
 
-`test/design_test.dart` — 5 **layout təhlükəsizliyi** testi: hər kompozisiya 390×844-də
-render olunur və hər hansı `RenderFlex` daşması testi düşürür.
+`test/design_test.dart` — 6 **layout təhlükəsizliyi** testi: hər kompozisiya 390×844-də
+render olunur və hər hansı `RenderFlex` daşması testi düşürür. Səthlərdən biri
+(`lockHud`) kilid ekranı HUD sətrinin üç vəziyyətini göstərir — sürücünün sistem
+ayarlarında tapması lazım olan yeganə idarə elementi cihazsız yoxlanılır.
 
-`test/golden_test.dart` — 5 golden müqayisəsi, `@Tags(['golden'])` ilə işarələnib.
+`test/golden_test.dart` — 6 golden müqayisəsi, `@Tags(['golden'])` ilə işarələnib.
 Şrift rasterizatoru hosta bağlı olduğu üçün CI bunları `--exclude-tags golden` ilə keçir:
 
 ```bash

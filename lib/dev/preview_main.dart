@@ -438,6 +438,42 @@ class _PrimaryActionMock extends StatelessWidget {
 // 2 · Gauge states
 // ---------------------------------------------------------------------------
 
+/// The three states of the lock-screen HUD row. It is the one control the driver
+/// has to find in the system settings, so it is pixel-reviewed like everything
+/// else instead of only being visible on a phone.
+class LockHudStates extends StatelessWidget {
+  const LockHudStates({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(NexSpace.page),
+      children: <Widget>[
+        SettingGroup(
+          title: 'Kilid ekranı · icazə verilməyib',
+          children: <Widget>[
+            LockHudTile(granted: false, active: false, onTap: _noop),
+          ],
+        ),
+        SettingGroup(
+          title: 'Kilid ekranı · icazə verilib, baloncuk sönük',
+          children: <Widget>[
+            LockHudTile(granted: true, active: false, onTap: _noop),
+          ],
+        ),
+        SettingGroup(
+          title: 'Kilid ekranı · aktiv',
+          children: <Widget>[
+            LockHudTile(granted: true, active: true, onTap: _noop),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+void _noop() {}
+
 class GaugeStates extends StatelessWidget {
   const GaugeStates({super.key});
 

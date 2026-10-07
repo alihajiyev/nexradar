@@ -360,33 +360,9 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                     'məsafə hər zaman görünür. HUD üçün icazə verilməyibsə, '
                     'rəsmi bildiriş kartı eyni məlumatı göstərir.',
                 children: <Widget>[
-                  SettingTile(
-                    icon: _lockHudActive
-                        ? Icons.lock_rounded
-                        : Icons.lock_outline_rounded,
-                    title: 'Kilid ekranı HUD',
-                    subtitle: _lockHudActive
-                        ? 'Baloncuk kilid ekranının üstündə çəkilir'
-                        : _lockHudEnabled
-                            ? 'İcazə verilib — baloncuk göstəriləndə aktivləşir'
-                            : 'Sürət, limit və məsafə üçün erişilebilirlik '
-                                'icazəsi ver',
-                    accent: _lockHudActive
-                        ? NexColors.primary
-                        : (_lockHudEnabled
-                            ? NexColors.amber
-                            : NexColors.textMid),
-                    trailing: StatusPill(
-                      label: _lockHudActive
-                          ? 'AKTİV'
-                          : (_lockHudEnabled ? 'HAZIR' : 'İCAZƏ VER'),
-                      color: _lockHudActive
-                          ? NexColors.primary
-                          : (_lockHudEnabled
-                              ? NexColors.amber
-                              : NexColors.textMid),
-                      dense: true,
-                    ),
+                  LockHudTile(
+                    granted: _lockHudEnabled,
+                    active: _lockHudActive,
                     onTap: _openLockHudSettings,
                   ),
                 ],

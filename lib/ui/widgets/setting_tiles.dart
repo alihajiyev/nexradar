@@ -115,6 +115,54 @@ class SettingTile extends StatelessWidget {
   }
 }
 
+/// The lock-screen HUD row.
+///
+/// Android hides every ordinary overlay window the moment the keyguard comes up,
+/// so the lock-screen bubble is drawn by an accessibility window instead. That
+/// grant can only be given in the system settings, which is why this row is a
+/// deep link rather than a switch — the app can read the state but never set it.
+class LockHudTile extends StatelessWidget {
+  const LockHudTile({
+    super.key,
+    required this.granted,
+    required this.active,
+    required this.onTap,
+  });
+
+  /// NexRadar is switched on under Settings → Accessibility.
+  final bool granted;
+
+  /// The service is bound right now: the bubble is really above the keyguard.
+  final bool active;
+
+  /// Opens the system accessibility settings.
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color tone = active
+        ? NexColors.primary
+        : (granted ? NexColors.amber : NexColors.textMid);
+
+    return SettingTile(
+      icon: active ? Icons.lock_rounded : Icons.lock_outline_rounded,
+      title: 'Kilid ekranı HUD',
+      subtitle: active
+          ? 'Baloncuk kilid ekranının üstündə çəkilir'
+          : granted
+              ? 'İcazə verilib — baloncuk göstəriləndə aktivləşir'
+              : 'Sürət, limit və məsafə üçün erişilebilirlik icazəsi ver',
+      accent: tone,
+      trailing: StatusPill(
+        label: active ? 'AKTİV' : (granted ? 'HAZIR' : 'İCAZƏ VER'),
+        color: tone,
+        dense: true,
+      ),
+      onTap: onTap,
+    );
+  }
+}
+
 class SettingSwitch extends StatelessWidget {
   const SettingSwitch({
     super.key,

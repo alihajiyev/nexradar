@@ -31,6 +31,7 @@ final Map<String, Widget Function()> designSurfaces = <String, Widget Function()
   'gauges': () => const GaugeStates(),
   'radars': () => const RadarsMock(),
   'settings': () => const SettingsMock(),
+  'lockHud': () => const LockHudStates(),
   'bubble': () => const BubbleMock(),
 };
 
