@@ -7,7 +7,6 @@ import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RadialGradient
-import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.SweepGradient
@@ -25,20 +24,19 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * The floating bubble.
+ * The floating bubble: a self-contained speed dial that owns its own drawing,
+ * gesture handling and 60 FPS interpolation.
  *
- * Two hard-won details shape this class:
- *
- * 1. **The window is full-screen.** `FLAG_SHOW_WHEN_LOCKED` — the flag that lets
- *    a window sit above the keyguard — is documented to apply only to *"the
- *    top-most full-screen window"*. A 124 dp bubble is not full-screen, which is
- *    exactly why the bubble never appeared on the lock screen. The host window is
- *    therefore `MATCH_PARENT` and this view draws the bubble at [bubbleX]/
- *    [bubbleY] inside it.
- * 2. **Touches outside the bubble must fall through.** A full-screen, touchable
- *    overlay would otherwise swallow every tap on the phone. [onTouchEvent]
- *    returns `false` unless the down event landed on the bubble or its "+"
- *    hotspot, which lets the system deliver the gesture to the app underneath.
+ * The host window is **exactly the size of the dial** ([windowSize]), never
+ * full-screen. A full-screen touchable overlay would swallow every tap on the
+ * phone, and going full-screen buys nothing: the window manager hides a
+ * `TYPE_APPLICATION_OVERLAY` window whenever the keyguard is showing, no matter
+ * which flags are set (`WindowState.canBeHiddenByKeyguard` puts everything below
+ * the keyguard host layer — including `TYPE_APPLICATION_OVERLAY` — behind it).
+ * The lock-screen route is [NexRadarAccessibilityService], which owns a
+ * `TYPE_ACCESSIBILITY_OVERLAY` window: that layer sits *above* the keyguard host
+ * and is exempt from the keyguard policy, so this same view renders over the
+ * lock screen unchanged.
  *
  * Rendering runs on a [Choreographer] callback so the needle keeps gliding at
  * 60 FPS while the Flutter engine is paused — the normal state of affairs with
@@ -47,11 +45,11 @@ import kotlin.math.sin
 class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCallback {
 
     interface Listener {
-        /** Live pixel offset while the user is dragging. */
-        fun onDrag(x: Int, y: Int)
+        /** Live pixel delta while the user is dragging; moves the window. */
+        fun onDragBy(dx: Int, dy: Int)
 
-        /** Final resting offset — persisted by the service. */
-        fun onDragFinished(x: Int, y: Int)
+        /** The gesture ended — the host persists the resting place. */
+        fun onDragFinished()
 
         /** Double tap: cycle between compact and expanded. */
         fun onScaleCycled(scale: Float)
@@ -76,21 +74,16 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
     private var unitLabel = "km/s"
     private var hasFix = true
 
-    /** Bubble top-left inside the full-screen window. */
-    var bubbleX = 0
-        private set
-    var bubbleY = 0
-        private set
-
     /** 1.0 = default size; 0.78 = compact; 1.3 = expanded. */
     var scaleFactor = 1f
         set(value) {
             val clamped = value.coerceIn(0.6f, 1.8f)
             if (abs(clamped - field) > 0.001f) {
-                val old = bubbleRect()
                 field = clamped
-                clampIntoWindow()
-                invalidate(old.union(bubbleRect()))
+                // The host re-measures the window on the next layout pass; until
+                // then the dial simply draws at the new size inside the old one.
+                requestLayout()
+                invalidate()
             }
         }
 
@@ -135,15 +128,22 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
     // ------------------------------------------------------------------- size
     private val baseSizeDp = 136f
 
-    private fun dp(value: Float): Float = value * resources.displayMetrics.density
+    /**
+     * Slack around the dial so the ambient glow, the bezel ticks and the "+"
+     * hotspot are not clipped by the window edge.
+     */
+    private val padRatio = 0.07f
 
-    /** Side of the bubble in pixels. */
-    val pixelSize: Int get() = (dp(baseSizeDp) * scaleFactor).toInt()
+    fun dp(value: Float): Float = value * resources.displayMetrics.density
 
-    private fun bubbleRect(): Rect {
-        val s = pixelSize
-        return Rect(bubbleX, bubbleY, bubbleX + s, bubbleY + s)
-    }
+    /** Side of the dial itself, in pixels. */
+    val contentSize: Int get() = (dp(baseSizeDp) * scaleFactor).toInt()
+
+    /** Side of the host window: the dial plus [padRatio] of breathing room. */
+    val windowSize: Int get() = (contentSize * (1f + 2f * padRatio)).toInt()
+
+    /** Offset of the dial inside the host window. */
+    private val pad: Float get() = (windowSize - contentSize) / 2f
 
     // ------------------------------------------------ geometry (unit square)
     private fun centerX(s: Float): Float = s * 0.5f
@@ -158,14 +158,14 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
 
     /** Everything the user can grab, in view coordinates. */
     private fun hitsBubble(x: Float, y: Float): Boolean {
-        val s = pixelSize.toFloat()
-        val cx = bubbleX + centerX(s)
-        val cy = bubbleY + centerY(s)
-        val r = radius(s) * 1.12f
-        if (hypot(x - cx, y - cy) <= r) return true
+        val s = contentSize.toFloat()
+        val p = pad
+        val cx = p + centerX(s)
+        val cy = p + centerY(s)
+        if (hypot(x - cx, y - cy) <= radius(s) * 1.12f) return true
 
-        val px = bubbleX + plusCenterX(s)
-        val py = bubbleY + plusCenterY(s)
+        val px = p + plusCenterX(s)
+        val py = p + plusCenterY(s)
         return hypot(x - px, y - py) <= plusRadius(s) * 1.5f
     }
 
@@ -175,38 +175,6 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
 
     private fun plusRadius(s: Float): Float = s * 0.105f
 
-    // ------------------------------------------------------------------ layout
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        if (bubbleX == 0 && bubbleY == 0) {
-            // First layout: park it in the upper-right, clear of the status bar.
-            bubbleX = (w - pixelSize - dp(12f)).toInt().coerceAtLeast(0)
-            bubbleY = dp(64f).toInt()
-        }
-        clampIntoWindow()
-    }
-
-    private fun clampIntoWindow() {
-        val s = pixelSize
-        val maxX = (width - s).coerceAtLeast(0)
-        val maxY = (height - s).coerceAtLeast(0)
-        if (bubbleX > maxX) bubbleX = maxX
-        if (bubbleY > maxY) bubbleY = maxY
-        if (bubbleX < 0) bubbleX = 0
-        if (bubbleY < 0) bubbleY = 0
-    }
-
-    fun moveTo(x: Int, y: Int) {
-        setPositionInternal(x, y)
-    }
-
-    private fun setPositionInternal(x: Int, y: Int) {
-        val old = bubbleRect()
-        bubbleX = x
-        bubbleY = y
-        clampIntoWindow()
-        invalidate(old.union(bubbleRect()))
-    }
 
     // ------------------------------------------------------------------ input
 
@@ -286,7 +254,7 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
             0f
         }
 
-        invalidate(bubbleRect())
+        invalidate()
 
         // Keep the loop alive only while something is actually moving: a
         // finished interpolation with no blinking costs zero CPU.
@@ -308,11 +276,11 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        val s = min(pixelSize, min(width, height)).toFloat()
+        val s = contentSize.toFloat()
         if (s <= 0) return
 
         canvas.save()
-        canvas.translate(bubbleX.toFloat(), bubbleY.toFloat())
+        canvas.translate(pad, pad)
 
         val cx = centerX(s)
         val cy = centerY(s)
@@ -562,8 +530,8 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                // Anything outside the bubble belongs to the app underneath —
-                // remember that the window is full-screen.
+                // The window is only as large as the dial, so a miss here is a
+                // touch on the window's transparent padding: let it go.
                 if (!hitsBubble(event.x, event.y)) {
                     gestureOwned = false
                     return false
@@ -583,7 +551,8 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
                     dragActive = true
                 }
                 if (dragActive) {
-                    setPositionInternal(bubbleX + dx.toInt(), bubbleY + dy.toInt())
+                    // The window itself moves, so only the delta is reported.
+                    listener?.onDragBy(dx.toInt(), dy.toInt())
                     downRawX = event.rawX
                     downRawY = event.rawY
                 }
@@ -595,7 +564,7 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
                 gestureOwned = false
                 if (dragActive) {
                     dragActive = false
-                    listener?.onDragFinished(bubbleX, bubbleY)
+                    listener?.onDragFinished()
                     return true
                 }
                 handleTap(event.x, event.y)
@@ -604,7 +573,10 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
 
             MotionEvent.ACTION_CANCEL -> {
                 gestureOwned = false
-                dragActive = false
+                if (dragActive) {
+                    dragActive = false
+                    listener?.onDragFinished()
+                }
                 return true
             }
         }
@@ -612,9 +584,10 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
     }
 
     private fun handleTap(x: Float, y: Float) {
-        val s = pixelSize.toFloat()
-        val pcx = bubbleX + plusCenterX(s)
-        val pcy = bubbleY + plusCenterY(s)
+        val s = contentSize.toFloat()
+        val p = pad
+        val pcx = p + plusCenterX(s)
+        val pcy = p + plusCenterY(s)
         if (hypot(x - pcx, y - pcy) <= plusRadius(s) * 1.6f) {
             listener?.onReportRequested()
             return

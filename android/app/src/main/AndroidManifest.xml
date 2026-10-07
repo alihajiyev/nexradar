@@ -74,6 +74,27 @@
                 android:value="Floating speedometer and radar warning bubble" />
         </service>
 
+        <!-- The lock-screen HUD.
+
+             This is the only window a normal app can create that the keyguard
+             does not hide: `TYPE_ACCESSIBILITY_OVERLAY` sits above the keyguard
+             host layer and is exempt from the keyguard policy, whereas a
+             `TYPE_APPLICATION_OVERLAY` window is always hidden once the phone is
+             locked. It is opt-in from Settings → Accessibility and renders the
+             same bubble the overlay service does — no screen content is read. -->
+        <service
+            android:name=".NexRadarAccessibilityService"
+            android:exported="true"
+            android:label="@string/lock_hud_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
         <!-- Hands the downloaded update APK to the system installer. Android 7+
              forbids exposing a file:// URI, so the cached download is shared
              through a content:// provider instead. -->

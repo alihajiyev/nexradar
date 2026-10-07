@@ -29,11 +29,15 @@ class SettingsTab extends StatefulWidget {
   State<SettingsTab> createState() => _SettingsTabState();
 }
 
-class _SettingsTabState extends State<SettingsTab> {
+class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
   late final TextEditingController _firebaseController;
   int _cameraCount = 0;
   int _temporaryCount = 0;
   bool _busy = false;
+
+  /// Lock-screen HUD: granted in the system settings, and actually drawing.
+  bool _lockHudEnabled = false;
+  bool _lockHudActive = false;
 
   AppServices get services => widget.services;
 
@@ -43,12 +47,38 @@ class _SettingsTabState extends State<SettingsTab> {
     _firebaseController =
         TextEditingController(text: services.settings.firebaseUrl);
     _refreshCounts();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshLockHud();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _firebaseController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Coming back from Settings → Accessibility is the only way this grant can
+    // change, so re-read it rather than trusting a cached value.
+    if (state == AppLifecycleState.resumed) _refreshLockHud();
+  }
+
+  Future<void> _refreshLockHud() async {
+    final bool enabled = await services.overlay.lockHudEnabled();
+    final bool active = await services.overlay.lockHudActive();
+    if (!mounted) return;
+    if (enabled == _lockHudEnabled && active == _lockHudActive) return;
+    setState(() {
+      _lockHudEnabled = enabled;
+      _lockHudActive = active;
+    });
+  }
+
+  Future<void> _openLockHudSettings() async {
+    await services.overlay.openLockHudSettings();
+    await _refreshLockHud();
   }
 
   Future<void> _refreshCounts() async {
@@ -316,17 +346,48 @@ class _SettingsTabState extends State<SettingsTab> {
                       services.overlay.setScale(v);
                     },
                   ),
+                ],
+              ),
+
+              // ------------------------------------------------ lock screen
+              // Android hides every ordinary overlay window as soon as the
+              // keyguard comes up, so the lock-screen bubble is drawn by a
+              // dedicated accessibility window instead. That grant can only be
+              // given in the system settings, hence the deep link.
+              SettingGroup(
+                title: 'Kilid ekranı',
+                footer: 'Kilid ekranında sürət, sürət limiti və radara qalan '
+                    'məsafə hər zaman görünür. HUD üçün icazə verilməyibsə, '
+                    'rəsmi bildiriş kartı eyni məlumatı göstərir.',
+                children: <Widget>[
                   SettingTile(
-                    icon: Icons.lock_outline_rounded,
-                    title: 'Kilid ekranı dəstəyi',
-                    subtitle: 'Ekranı yandırdıqda baloncuk şifrə istəmədən '
-                        'görünür (setShowWhenLocked)',
-                    accent: NexColors.primary,
-                    trailing: const StatusPill(
-                      label: 'AKTİV',
-                      color: NexColors.primary,
+                    icon: _lockHudActive
+                        ? Icons.lock_rounded
+                        : Icons.lock_outline_rounded,
+                    title: 'Kilid ekranı HUD',
+                    subtitle: _lockHudActive
+                        ? 'Baloncuk kilid ekranının üstündə çəkilir'
+                        : _lockHudEnabled
+                            ? 'İcazə verilib — baloncuk göstəriləndə aktivləşir'
+                            : 'Sürət, limit və məsafə üçün erişilebilirlik '
+                                'icazəsi ver',
+                    accent: _lockHudActive
+                        ? NexColors.primary
+                        : (_lockHudEnabled
+                            ? NexColors.amber
+                            : NexColors.textMid),
+                    trailing: StatusPill(
+                      label: _lockHudActive
+                          ? 'AKTİV'
+                          : (_lockHudEnabled ? 'HAZIR' : 'İCAZƏ VER'),
+                      color: _lockHudActive
+                          ? NexColors.primary
+                          : (_lockHudEnabled
+                              ? NexColors.amber
+                              : NexColors.textMid),
                       dense: true,
                     ),
+                    onTap: _openLockHudSettings,
                   ),
                 ],
               ),

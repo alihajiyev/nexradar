@@ -1,8 +1,37 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+/**
+ * Signing.
+ *
+ * In-app updates only work when every build of NexRadar carries the *same*
+ * signature: Android refuses to replace an installed package with an APK signed
+ * by a different key (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`). CI is a fresh
+ * machine with no `~/.android/debug.keystore`, so it would silently mint a new
+ * debug key on every run and break the update chain after the very first build.
+ *
+ * `android/key.properties` (git-ignored, injected from repository secrets in CI)
+ * therefore pins the release signature:
+ *
+ *     storeFile=/absolute/path/nexradar.jks
+ *     storePassword=…
+ *     keyAlias=…
+ *     keyPassword=…
+ *
+ * Without the file the build falls back to the debug key, which is what a plain
+ * `flutter run --release` on a developer machine expects.
+ */
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
+}
+val releaseKeystore = keystorePropertiesFile.exists()
 
 android {
     namespace = "com.nexradar.app"
@@ -32,11 +61,24 @@ android {
         versionName = flutter.versionName
     }
 
+    if (releaseKeystore) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (releaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

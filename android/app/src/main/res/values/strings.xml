@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shown in Settings → Accessibility, where the driver switches the
+         lock-screen HUD on. -->
+    <string name="lock_hud_service_label">NexRadar kilid ekranı HUD</string>
+    <string name="lock_hud_description">Kilid ekranında sürəti, sürət limitini və radara qalan məsafəni göstərən yüzen göstərici.</string>
+    <string name="lock_hud_summary">Yalnız yüzen göstəricini çəkir. Ekran məzmununu oxumur.</string>
+</resources>

@@ -13,11 +13,17 @@ import 'package:permission_handler/permission_handler.dart';
 ///
 /// * the overlay keeps working while the Flutter engine is paused, so the
 ///   bubble survives the screen turning off;
-/// * `FLAG_SHOW_WHEN_LOCKED` + a `TYPE_APPLICATION_OVERLAY` window lets the
-///   bubble render **on the lock screen** without unlocking the device;
 /// * the 60 FPS interpolation happens on the native render thread with a
 ///   `Choreographer` callback, so the needle never stutters;
 /// * no second Flutter engine means no extra ~60 MB of RSS.
+///
+/// **Two hosts, one bubble.** Android hides every overlay window the moment the
+/// keyguard comes up — `FLAG_SHOW_WHEN_LOCKED` cannot lift a window above the
+/// keyguard, it only re-enables one while the keyguard is already occluded — so
+/// the lock screen is served by a second host
+/// (`NexRadarAccessibilityService`) whose accessibility window sits above it.
+/// [lockHudEnabled] reports the driver's grant, [lockHudActive] reports whether
+/// that host is actually drawing right now.
 ///
 /// Flutter pushes a tiny JSON payload here roughly once a second (the GPS
 /// cadence) and the native view smooths it to 60 FPS.
@@ -125,6 +131,44 @@ class OverlayService {
     try {
       await _methods.invokeMethod<void>('setScale', <String, Object?>{'scale': scale});
     } catch (_) {}
+  }
+
+  // ---------------------------------------------------------- lock-screen HUD
+
+  /// Whether the driver switched the lock-screen HUD on under
+  /// *Settings → Accessibility → NexRadar*.
+  Future<bool> lockHudEnabled() async {
+    if (!isSupported) return false;
+    try {
+      final bool? enabled = await _methods.invokeMethod<bool>('lockHudEnabled');
+      return enabled ?? false;
+    } catch (e) {
+      if (kDebugMode) debugPrint('[OverlayService] lockHudEnabled failed: $e');
+      return false;
+    }
+  }
+
+  /// Whether the accessibility host is bound right now — i.e. whether the bubble
+  /// is genuinely being drawn above the keyguard.
+  Future<bool> lockHudActive() async {
+    if (!isSupported) return false;
+    try {
+      final bool? active = await _methods.invokeMethod<bool>('lockHudActive');
+      return active ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Deep-links to the one settings page that can grant an accessibility
+  /// service. There is no in-app dialog for this by design.
+  Future<void> openLockHudSettings() async {
+    if (!isSupported) return;
+    try {
+      await _methods.invokeMethod<void>('openLockHudSettings');
+    } catch (e) {
+      if (kDebugMode) debugPrint('[OverlayService] openLockHudSettings failed: $e');
+    }
   }
 
   Future<bool> refreshRunningState() async {

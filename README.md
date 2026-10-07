@@ -22,7 +22,7 @@ və qalan məsafəni göstərir; hədd aşıldıqda səslə xəbərdarlıq edir.
 | 400 m qalmış | TTS: *"İrəlidə radar var, sürət həddi 80 kilometr saat, 400 metr qaldı."* |
 | 150 m qalmış | TTS: *"Yavaşlayın, radara 150 metr qaldı!"* |
 | Baloncukda `+`-a toxunmaq | Anlıq mövqe "Mobil YPX" kimi bildirilir, 2 saat canlı qalır |
-| Telefon kilidlənib | Ekranı yandırdıqda baloncuk **şifrə soruşmadan** kilid ekranında görünür |
+| Telefon kilidlənib | Kilid ekranında sürət, limit və radara qalan məsafə görünür — HUD (erişilebilirlik pəncərəsi) və ya rəsmi bildiriş kartı |
 
 Baloncuk sürüklənə bilər, **iki dəfə toxunmaqla** ölçüsü dəyişir (kiçik → normal →
 böyük) və mövqeyi/ölçüsü yadda saxlanılır.
@@ -153,7 +153,7 @@ Layihə tapşırığında `flutter_overlay_window` nəzərdə tutulmuşdu. İste
 
 | Meyar | `flutter_overlay_window` | Native overlay |
 | --- | --- | --- |
-| Kilid ekranı (`FLAG_SHOW_WHEN_LOCKED`) | ❌ ikinci engine pəncərəsi kilid ekranına buraxılmır | ✅ tam nəzarət |
+| Kilid ekranı | ❌ ikinci engine pəncərəsi kilid ekranına buraxılmır | ✅ erişilebilirlik host-u ilə (aşağıya bax) |
 | Ekran bağlıykən FPS | Dart isolate dayanır → kadr donur | ✅ native render thread |
 | Yaddaş (RSS) | +≈60 MB (ikinci Flutter engine) | ≈0 |
 | Build stabilliyi | 0.5.0 AGP 9 / Gradle 9.3 ilə riskli | ✅ heç bir xarici asılılıq |
@@ -161,6 +161,38 @@ Layihə tapşırığında `flutter_overlay_window` nəzərdə tutulmuşdu. İste
 
 `overlay_service.dart` Dart tərəfdəki müqavilədir — plugin dəyişsə də yuxarı qat
 (`radar_engine.dart`) heç nə bilməz.
+
+Baloncuk pəncərəsi **həmişə tam baloncuk ölçüsündədir**, ekran boyu deyil: tam ekran
+şəffaf pəncərə telefonun bütün toxunuşlarını udar.
+
+### Kilid ekranı: iki host, bir baloncuk
+
+Android **kilid ekranı görünəndə adi overlay pəncərəsini həmişə gizlədir** və bunu
+dəyişən flag yoxdur. `WindowManager` hər pəncərəyə kilid ekranı siyasəti tətbiq edir
+(`WindowState.canBeHiddenByKeyguard`) və siyasət yalnız kilid ekranı host qatından
+aşağıda oturan pəncərələrə şamil olunur:
+
+| Pəncərə növü | Qat | Kilid ekranında görünür? |
+| --- | --- | --- |
+| `TYPE_APPLICATION_OVERLAY` | 11 | ❌ gizlədilir |
+| `TYPE_NOTIFICATION_SHADE` (kilid ekranı host-u) | 17 | — |
+| `TYPE_ACCESSIBILITY_OVERLAY` | 31 | ✅ |
+
+`FLAG_SHOW_WHEN_LOCKED` burada kömək etmir: o, yalnız kilid ekranı artıq bir
+`Activity` tərəfindən *occluded* edildikdə pəncərəni geri qaytarır — yəni heç vaxt
+"kilid ekranının üstündə" demək deyil. Ona görə NexRadar **iki host** işlədir:
+
+* `RadarOverlayService` → `TYPE_APPLICATION_OVERLAY`: ekran açıqkən, hər tətbiqin üstündə;
+* `NexRadarAccessibilityService` → `TYPE_ACCESSIBILITY_OVERLAY`: **kilid ekranının üstündə**.
+
+İkincisi Ayarlar → Erişilebilirlik-dən bir dəfə yandırılır (tətbiq ora özü yönləndirir)
+və ekran məzmununu **oxumur** (`canRetrieveWindowContent="false"`). Aktiv olduqda
+baloncugu yalnız o çəkir — foreground xidməti isə yenə də işləyir, çünki prosesi və GPS
+axınını məhz o saxlamaqdadır (`BubbleHost` iki host arasında seçim edir).
+
+Erişilebilirlik icazəsi verilməyibsə, kilid ekranında **rəsmi bildiriş kartı** eyni üç
+rəqəmi göstərir — sürət · limit · radara qalan məsafə — və heç bir əlavə icazə
+tələb etmir.
 
 ---
 
@@ -173,9 +205,12 @@ Layihə tapşırığında `flutter_overlay_window` nəzərdə tutulmuşdu. İste
 | `SYSTEM_ALERT_WINDOW` | "Digər tətbiqlərin üzərində göstər" — baloncuk |
 | `FOREGROUND_SERVICE` + `_LOCATION` + `_SPECIAL_USE` | Xidmətin öldürülməməsi |
 | `POST_NOTIFICATIONS` | Daimi xidmət bildirişi (Android 13+) |
+| `REQUEST_INSTALL_PACKAGES` | Tətbiq daxilində yeniləmə (APK-nı sistem quraşdırıcısına ötürmək) |
 | `VIBRATE` | Hədd aşımında həyəcan |
+| *erişilebilirlik xidməti* | Kilid ekranı HUD — Ayarlar → Erişilebilirlik-dən verilir, ekran oxunmur |
 
-Baloncuk bildirişində iki əməliyyat var: **"Radar bildir"** və **"Dayandır"**.
+Kilid ekranı bildiriş kartında **sürət, limit, radara qalan məsafə və radar növü**
+görünür (`VISIBILITY_PUBLIC`), üstündə iki əməliyyat: **"Radar bildir"** və **"Dayandır"**.
 
 ---
 
@@ -202,44 +237,81 @@ flutter build apk --release \
 
 ---
 
-## 7. Quraşdırma və derləmə
+## 7. Quraşdırma, derləmə və yeniləmə
 
 ```bash
 flutter pub get
 flutter analyze          # 0 issue
-flutter test             # 39 test (34 məntiq + 5 dizayn/layout)
+flutter test             # 44 test (34 məntiq + 5 layout + 5 golden)
 
 # Release APK
-flutter build apk --release
+flutter build apk --release --dart-define=NEX_RADAR_REPO=alihajiyev/nexradar
 # → build/app/outputs/flutter-apk/app-release.apk
 
 # Split ABI (kiçik fayllar, tövsiyə olunur)
 flutter build apk --release --split-per-abi
 ```
 
-Kilid ekranında sınamaq üçün:
+`NEX_RADAR_REPO` — tətbiqin yeniləmə axtardığı GitHub `owner/repo` slug-ı. Verilməzsə
+`alihajiyev/nexradar` işlədilir.
+
+### Tətbiq daxilində yeniləmə
+
+APK-nı telefona əl ilə köçürmək lazım deyil:
+
+1. **Ayarlar → Yeniləmə → "Yoxla"** (açılışda avtomatik yoxlama da var, söndürülə bilər).
+2. Tətbiq `https://api.github.com/repos/<slug>/releases/latest` sorğusunu göndərir;
+   `compareVersions` quraşdırılmış `versionName`-i release teqi ilə müqayisə edir
+   (`v1.2.3-beta+build` kimi formaları da başa düşür).
+3. Yenisi varsa APK axın şəkildə `cacheDir/updates/`-ə endirilir (proqres göstərilir),
+   sonra `FileProvider` (`content://…fileprovider/updates/…`) vasitəsilə sistem
+   quraşdırıcısına ötürülür.
+4. Yalnız ilk dəfə **"Naməlum mənbələrdən quraşdırma"** icazəsi soruşulur; tətbiq
+   həmin ayar səhifəsinə özü yönləndirir.
+
+### Yeni sürüm yayımlamaq
+
+`.github/workflows/release.yml` **main**-ə push-da `pubspec.yaml`-daki versiyanı oxuyur və
+həmin versiya üçün GitHub Release yoxdursa APK-nı derləyib `v<sürüm>` teqi ilə yayımlayır.
+`v*` teq push-u və əl ilə `workflow_dispatch` da işləyir.
 
 ```bash
-adb install -r build/app/outputs/flutter-apk/app-release.apk
-adb shell am start -n com.nexradar.app/.MainActivity
+# Yeganə addım: versiyanı qaldır və push et
+#   pubspec.yaml: version: 1.2.0+4
+git commit -am "chore: bump version"
+git push
 ```
 
-### Release imzalama (növbəti addım)
+İş axını `flutter analyze` + `flutter test` keçmədən release yayımlamır.
 
-Hazırda `android/app/build.gradle.kts` debug açarı ilə imzalayır (Flutter şablonu),
-yəni APK dərhal quraşdırılır. Play Store üçün:
+### İmzalama — yeniləmənin şərti
 
-```kotlin
-release {
-    signingConfig = signingConfigs.getByName("release")
-}
-```
+Android eyni paketi **başqa açarla imzalanmış** APK ilə əvəz etmir
+(`INSTALL_FAILED_UPDATE_INCOMPATIBLE`). CI hər run üçün təmiz maşındır: `~/.android/debug.keystore`
+orasında yoxdur və hər build yeni açar yaradardı — yəni yeniləmə zənciri ilk gündən qırılardı.
+Ona görə açar repo sirri kimi saxlanılır:
+
+| Secret | Məzmun |
+| --- | --- |
+| `SIGNING_KEYSTORE_BASE64` | `base64 -w0 <keystore>` |
+| `SIGNING_STORE_PASSWORD` | keystore parolu |
+| `SIGNING_KEY_ALIAS` | açar alias-ı |
+| `SIGNING_KEY_PASSWORD` | açar parolu |
+
+CI bunları `android/key.properties`-ə yazır. Yerli maşında `android/key.properties`
+yoxdursa build Flutter şablonunun debug açarına düşür (`android/app/build.gradle.kts`).
+
+> Hazırkı release açarı **Android-in standart debug açarıdır**. Bu, artıq telefonda
+> quraşdırılmış NexRadar ilə imza uyğunluğunu saxlayır — yəni yeniləmə ilk gündən işləyir,
+> bir dəfəlik silib-yenidən quraşdırma tələb olunmur. Özəl açara keçmək istəsən, açarı
+> dəyişmək **bir dəfəlik** silib-yenidən quraşdırma deməkdir.
 
 ---
 
 ## 8. Testlər
 
 `test/widget_test.dart` — 34 test, hamısı pluginsiz işləyir:
+
 
 * Haversine məsafə + bearing (4 kardinal istiqamət)
 * `angularDifference` 0°/360° keçidi
@@ -249,6 +321,17 @@ release {
 * OSM tag parser: `mph` çevrilməsi, `AZ:urban`, compass, zibil dəyərlərin rəddi
 * `SpeedCamera` `toMap → fromMap` gediş-dönüş + `identityKey` dedup
 * `PhraseBook`: AZ/TR/EN cümlələr və yuvarlaqlaşdırma (137 m → "140")
+
+`test/design_test.dart` — 5 **layout təhlükəsizliyi** testi: hər kompozisiya 390×844-də
+render olunur və hər hansı `RenderFlex` daşması testi düşürür.
+
+`test/golden_test.dart` — 5 golden müqayisəsi, `@Tags(['golden'])` ilə işarələnib.
+Şrift rasterizatoru hosta bağlı olduğu üçün CI bunları `--exclude-tags golden` ilə keçir:
+
+```bash
+flutter test --update-goldens test/golden_test.dart   # golden-ları yenilə
+flutter test --exclude-tags golden                    # CI-ın işlətdiyi dəst
+```
 
 > Qeyd: testlər iki real buqı tapdı və düzəldildi — filtrin hədəfdən bir az əvvəl
 > donması və `parseDirection("nonsense")` → 0° (prefix uyğunluğu).
@@ -261,3 +344,7 @@ release {
 * Orta sürət (average speed) zonaları üçün giriş-çıxış cütləri
 * Xəritədə radar heatmap + "yoldaş rejimi"
 * iOS portu (`CoreLocation` + `UIWindow` overlay; Dart tərəfi hazırdır)
+
+Bitmiş addımlar: kilid ekranı HUD (erişilebilirlik host-u + publik bildiriş kartı),
+sabit 5 km radar ufqu, tətbiq daxilində yeniləmə və GitHub Releases boru xətti,
+`Inter`/`InterDisplay` dizayn sistemi.

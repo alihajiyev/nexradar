@@ -1,11 +1,15 @@
-# Builds the release APK and attaches it to a GitHub Release.
+# Builds NexRadar and publishes it as a GitHub Release.
 #
-# This is the other half of the in-app updater: pushing a version tag is the
-# only step needed to ship a new build. The app itself then finds the new
-# release through the GitHub API and installs it, so no APK ever has to be moved
-# to the phone by hand again.
+# This is the other half of the in-app updater. The app queries
+# `releases/latest`, downloads the first `.apk` asset and hands it to the system
+# installer, so shipping a new build never means moving a file to the phone by
+# hand again.
 #
-#   git tag v1.1.0 && git push origin v1.1.0
+# What triggers a release:
+#   * a push to `main` whose `pubspec.yaml` version has no release yet — this is
+#     the everyday path: bump the version, push, done;
+#   * a `v*` tag push;
+#   * a manual dispatch (with `force` to rebuild an existing version).
 #
 # The asset is always named `NexRadar.apk` (the updater takes the first `.apk`
 # asset of the latest release, so the name is not load-bearing).
@@ -14,16 +18,27 @@ name: Release APK
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Rebuild even if this version already has a release'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: '3.47.5'
+  RELEASE_TAG: ''
 
 jobs:
   build:
@@ -34,46 +49,119 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # --------------------------------------------------------------- version
+      #
+      # Everything downstream keys off `RESOLVED_TAG`. `pubspec.yaml` is the
+      # single source of truth for the version; a tag push just names it.
+      - name: Resolve the version to release
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="$(grep -m1 '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*([^+[:space:]]+).*/\1/')"
+            TAG="v${VERSION}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${TAG} is already published — nothing to build."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${TAG} is new — building and publishing."
+          fi
+
+      - name: Should we build?
+        id: gate
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.version.outputs.exists }}" == "true" && "${{ inputs.force }}" != "true" ]]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ------------------------------------------------------------- toolchain
       - name: Set up JDK 17
+        if: steps.gate.outputs.build == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Flutter
+        if: steps.gate.outputs.build == 'true'
         uses: subosito/flutter-action@v2
         with:
           # Pinned so a new stable release cannot change the shipped binary.
-          flutter-version: '3.47.5'
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
       - name: Install Android SDK packages
+        if: steps.gate.outputs.build == 'true'
         run: |
           SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
           yes | "${SDKMANAGER}" --licenses > /dev/null 2>&1 || true
           "${SDKMANAGER}" "platforms;android-37" "build-tools;36.0.0" "ndk;28.2.13676358"
 
+      # --------------------------------------------------------------- signing
+      #
+      # In-app updates only work when consecutive builds share one signature:
+      # Android refuses to replace a package signed by a different key. Runners
+      # are thrown away after every job, so the key must come from a secret.
+      - name: Provide the release keystore
+        if: steps.gate.outputs.build == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${KEYSTORE_BASE64}" ]]; then
+            echo "::warning::SIGNING_KEYSTORE_BASE64 is unset — this build falls back to a throwaway debug key and will NOT be installable over the previous release."
+            exit 0
+          fi
+          echo "${KEYSTORE_BASE64}" | base64 --decode > "${RUNNER_TEMP}/release.jks"
+          {
+            echo "storeFile=${RUNNER_TEMP}/release.jks"
+            echo "storePassword=${SIGNING_STORE_PASSWORD}"
+            echo "keyAlias=${SIGNING_KEY_ALIAS}"
+            echo "keyPassword=${SIGNING_KEY_PASSWORD}"
+          } > android/key.properties
+
+      # ----------------------------------------------------------------- build
       - name: Install dependencies
+        if: steps.gate.outputs.build == 'true'
         run: flutter pub get
 
       - name: Analyze
+        if: steps.gate.outputs.build == 'true'
         run: flutter analyze
 
       - name: Test
-        # Golden comparisons are host-specific (font rasteriser), so they stay
-        # on the developer machine.
+        if: steps.gate.outputs.build == 'true'
+        # Golden comparisons are host-specific (font rasteriser), so they stay on
+        # the developer machine.
         run: flutter test --exclude-tags golden
 
       - name: Build release APK
+        if: steps.gate.outputs.build == 'true'
         run: |
           flutter build apk --release \
             --dart-define=NEX_RADAR_REPO=${{ github.repository }}
 
       - name: Stage the artifact
+        if: steps.gate.outputs.build == 'true'
         run: cp build/app/outputs/flutter-apk/app-release.apk NexRadar.apk
 
       - name: Upload build artifact
+        if: steps.gate.outputs.build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: NexRadar-apk
@@ -81,9 +169,15 @@ jobs:
           retention-days: 14
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.gate.outputs.build == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: NexRadar ${{ steps.version.outputs.tag }}
+          body: |
+            NexRadar ${{ steps.version.outputs.tag }} — kilid ekranı HUD'u, sabit 5 km radar ufqu və tətbiq daxilində yeniləmə.
+
+            Telefonda: **Ayarlar → Yeniləmə → Yoxla** və ya tətbiqi açanda çıxan banner.
           files: NexRadar.apk
           generate_release_notes: true
           fail_on_unmatched_files: true

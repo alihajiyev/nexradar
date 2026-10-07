@@ -1,5 +1,6 @@
 package com.nexradar.app
 
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -18,15 +19,16 @@ import java.io.File
 /**
  * Flutter host + the native side of the floating bubble.
  *
- * Two responsibilities beyond the usual `FlutterActivity`:
+ * Responsibilities beyond the usual `FlutterActivity`:
  *
- * * **Lock screen.** `setShowWhenLocked(true)` lets this activity render on top
- *   of the keyguard, and the same flag is applied to the overlay window in
- *   [RadarOverlayService], so the bubble is visible the moment the driver turns
- *   the screen on — no PIN required.
- * * **Platform channel.** `nexradar/overlay` is the control surface
- *   (permission, show/hide, state push) and `nexradar/overlay_events` carries
- *   taps made *on the bubble* back into Dart.
+ * * **Lock screen.** `setShowWhenLocked(true)` lets the dashboard itself render
+ *   over the keyguard. The *bubble* uses a different mechanism: it is hosted by
+ *   [NexRadarAccessibilityService], because a `TYPE_APPLICATION_OVERLAY` window
+ *   is always hidden once the keyguard is up.
+ * * **Platform channels.** `nexradar/overlay` is the control surface
+ *   (permissions, show/hide, state push), `nexradar/overlay_events` carries taps
+ *   made *on the bubble* back into Dart, and `nexradar/update` drives in-app
+ *   updates from GitHub Releases.
  */
 class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 
@@ -204,7 +206,10 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
             }
 
             "show" -> {
-                if (!canOverlay()) {
+                // Either grant can carry the bubble: the overlay permission for
+                // the normal window, or the accessibility grant for the window
+                // that survives the keyguard.
+                if (!canOverlay() && !lockHudEnabled()) {
                     result.success(false)
                     return
                 }
@@ -220,6 +225,24 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
             "hide" -> {
                 RadarOverlayService.stop(this)
                 result.success(true)
+            }
+
+            // ------------------------------------------------ lock-screen HUD
+
+            "lockHudEnabled" -> result.success(lockHudEnabled())
+
+            "lockHudActive" -> result.success(NexRadarAccessibilityService.isConnected())
+
+            "openLockHudSettings" -> {
+                // Enabling an accessibility service is a user decision by
+                // design: Android exposes it only through these settings.
+                runCatching {
+                    startActivity(
+                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                }
+                result.success(null)
             }
 
             "update" -> {
@@ -243,6 +266,28 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 
     private fun canOverlay(): Boolean = Settings.canDrawOverlays(this)
 
+    /**
+     * True when the driver has switched NexRadar on under Settings →
+     * Accessibility. Both switches matter: the per-service grant and the master
+     * toggle, because an off master toggle keeps the service unbound.
+     */
+    private fun lockHudEnabled(): Boolean {
+        val master = Settings.Secure.getInt(
+            contentResolver,
+            Settings.Secure.ACCESSIBILITY_ENABLED,
+            0,
+        ) == 1
+        if (!master) return false
+
+        val expected = ComponentName(this, NexRadarAccessibilityService::class.java)
+        val enabled = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        ) ?: return false
+        return enabled.split(':')
+            .any { it.equals(expected.flattenToString(), ignoreCase = true) }
+    }
+
     private fun asMap(arguments: Any?): Map<String, Any?> {
         val map = arguments as? Map<*, *> ?: return emptyMap()
         return map.entries.associate { (key, value) -> key.toString() to value }
@@ -250,12 +295,15 @@ class MainActivity : FlutterActivity(), EventChannel.StreamHandler {
 
     override fun onResume() {
         super.onResume()
-        // The user may be coming back from the "display over other apps" page.
-        // If they granted it, honour the pending request immediately.
-        if (OverlayBus.overlayDesired && canOverlay() && !RadarOverlayService.isRunning) {
+        // The user may be coming back from the "display over other apps" or the
+        // accessibility page: re-evaluate both hosts so a fresh grant is used
+        // immediately instead of on the next app launch.
+        BubbleHost.refresh()
+        if (BubbleWindow.isDesired(this) && !RadarOverlayService.isRunning) {
             RadarOverlayService.start(this)
         }
         methodChannel?.invokeMethod("onResumed", canOverlay())
+        OverlayBus.emit("lockHud", mapOf("active" to NexRadarAccessibilityService.isConnected()))
     }
 
     override fun onDestroy() {
