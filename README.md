@@ -242,7 +242,7 @@ flutter build apk --release \
 ```bash
 flutter pub get
 flutter analyze          # 0 issue
-flutter test             # 44 test (34 məntiq + 5 layout + 5 golden)
+flutter test             # 54 test (44 məntiq + 5 layout + 5 golden)
 
 # Release APK
 flutter build apk --release --dart-define=NEX_RADAR_REPO=alihajiyev/nexradar
@@ -310,7 +310,7 @@ yoxdursa build Flutter şablonunun debug açarına düşür (`android/app/build.
 
 ## 8. Testlər
 
-`test/widget_test.dart` — 34 test, hamısı pluginsiz işləyir:
+`test/widget_test.dart` + `test/update_service_test.dart` — 44 test, hamısı pluginsiz işləyir:
 
 
 * Haversine məsafə + bearing (4 kardinal istiqamət)
@@ -321,6 +321,10 @@ yoxdursa build Flutter şablonunun debug açarına düşür (`android/app/build.
 * OSM tag parser: `mph` çevrilməsi, `AZ:urban`, compass, zibil dəyərlərin rəddi
 * `SpeedCamera` `toMap → fromMap` gediş-dönüş + `identityKey` dedup
 * `PhraseBook`: AZ/TR/EN cümlələr və yuvarlaqlaşdırma (137 m → "140")
+* **`UpdateService`**: release aşkarlanması (APK aktivinin seçilməsi, 404, şəbəkə
+  xətası) və versiya arifmetikası (`v1.2.3-beta+build` normalizasiyası,
+  `1.10.0 > 1.9.0` — sətir yox, ədəd müqayisəsi). GitHub cavabı `MockClient`,
+  quraşdırılmış sürüm `nexradar/update` kanalının mock-u ilə verilir.
 
 `test/design_test.dart` — 5 **layout təhlükəsizliyi** testi: hər kompozisiya 390×844-də
 render olunur və hər hansı `RenderFlex` daşması testi düşürür.
