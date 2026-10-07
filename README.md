@@ -102,6 +102,25 @@ NexRadar bunu belə həll edir:
 
 `onTaskRemoved` OEM tapşırıq qatillərinə qarşı foreground xidmətini yenidən təsdiqləyir.
 
+### Yenidən başlatmadan sonra
+
+Telefon restart olanda arxa fon tətbiqi üçün ən asan itki yeri budur: servis yalnız
+tətbiqin öz activity-sindən başladılırsa, sürücü tətbiqi yenidən açana qədər radar
+susur. `BootReceiver` `BOOT_COMPLETED` (və `MY_PACKAGE_REPLACED`) mesajını tutur və
+**yalnız** sürücü baloncuğu açıq saxlayıbsa servisi yenidən qaldırır — bu da
+`NexRadarApplication`-dan motoru istəyir, Dart `main()`-i işə düşür və boru xətti
+UI-siz davam edir. Yəni səhər maşına əyləşəndə tətbiqi açmaq lazım deyil.
+
+### Sürüş hesabatı
+
+Panel "indi" cavabını verir; sürücünün səyahətdən sonra verdiyi sual isə başqadır:
+*"yaxşı getdim?"* Ona görə engine sürüş boyu bir neçə rəqəm yığır — məsafə, orta və
+maksimum sürət, limitdən yuxarı keçən **vaxt** (tunnel boşluqları çıxılmaqla),
+anons sayı və keçilən radar sayı — və `drive_report.dart` bunları bir kartda
+göstərir. Orta sürət eyni məsafə/vaxt arifmetikasıdır, yəni orta sürət kamerasının
+hesabladığı rəqəm. Rəqəmlər tətbiq bağlıykən də artmağa davam edir, çünki onları
+yazan boru xətti davam edir.
+
 ### 60 FPS "yağ kimi" göstərici
 
 GPS çipi saniyədə bir dəfə veri verir. Ona görə hər iki tərəfdə eyni eksponensial
@@ -365,6 +384,20 @@ APK-nı telefona əl ilə köçürmək lazım deyil:
 4. Yalnız ilk dəfə **"Naməlum mənbələrdən quraşdırma"** icazəsi soruşulur; tətbiq
    həmin ayar səhifəsinə özü yönləndirir.
 
+### Sükutla yeniləmə (Shizuku)
+
+Ən son Android versiyaları tətbiqin özünü dialoq olmadan yeniləməsinin qarşısını
+alır: `REQUEST_INSTALL_PACKAGES` yalnız sistem qurşadırıcısını açır. Sürücüdə
+**Shizuku** varsa, NexRadar ondan shell kimliyini borc alır və APK-nı
+`pm install -S <ölçü>` içinə stdin ilə axıdaraq sükutla quraşdırır (fayl yolu ilə
+yox — `pm` tətbiqin şəxsi keş qovluğunu oxuya bilmir).
+
+Bu opsionaldır və **heç vaxt yeniləməni poza bilməz**: Shizuku yoxdursa, icazə
+verilməyibsə və ya sükutla quraşdırma hər hansı səbəbdən alınmazsa, axın adi
+qurşadırıcıya düşür. Qərar tək bir yerdə — `chooseInstallRoute()` — verilir və
+testlərlə qorunur, çünki "optimist" cəhd sürücüyə gözlədiyi dialoq əvəzinə xəta
+göstərərdi. Diaqnostika ekranı bu sətri də göstərir: aktiv / icazə gözləyir / yoxdur.
+
 ### Yeni sürüm yayımlamaq
 
 `.github/workflows/release.yml` **main**-ə push-da `pubspec.yaml`-daki versiyanı oxuyur və
@@ -373,7 +406,7 @@ həmin versiya üçün GitHub Release yoxdursa APK-nı derləyib `v<sürüm>` te
 
 ```bash
 # Yeganə addım: versiyanı qaldır və push et
-#   pubspec.yaml: version: 1.3.0+4
+#   pubspec.yaml: version: 1.4.0+5
 git commit -am "chore: bump version"
 git push
 ```
@@ -407,7 +440,7 @@ yoxdursa build Flutter şablonunun debug açarına düşür (`android/app/build.
 ## 8. Testlər
 
 `test/widget_test.dart` + `test/update_service_test.dart` + `test/route_and_alerts_test.dart` +
-`test/diagnostics_and_sections_test.dart` — **100 test**, hamısı pluginsiz işləyir:
+`test/diagnostics_and_sections_test.dart` — **112 test**, hamısı pluginsiz işləyir:
 
 
 * Haversine məsafə + bearing (4 kardinal istiqamət)
@@ -438,6 +471,12 @@ yoxdursa build Flutter şablonunun debug açarına düşür (`android/app/build.
 * **`NativeDiagnostics`**: maneələrin düzgün sırası (konum → üzərdə göstərmə → bildiriş →
   batareya → bucket), `RESTRICTED_BUCKET (45)` aşkarlanması və host adının sürücü
   dilinə çevrilməsi.
+* **Sükutla yeniləmə marşrutu**: `chooseInstallRoute()` — Shizuku yoxdursa və ya
+  icazə verilməyibsə sistem qurşadırıcısı, yalnız hər ikisi varsa sükut axını
+  (optimist cəhdin sürücünü xəta ilə qoyub getməməsi üçün).
+* **`DriveReport`**: məsafə/vaxt → orta sürət (60 km/s), təmiz sürüş cümləsi,
+  qısa aşımın həyəcansız, uzun aşımın faizlə bildirilməsi, hərəkətsiz sürüşün
+  sıfıra bölməməsi və saat geri qaçdıqda mənfi müddətin yaranmaması.
 
 `test/design_test.dart` — 6 **layout təhlükəsizliyi** testi: hər kompozisiya 390×844-də
 render olunur və hər hansı `RenderFlex` daşması testi düşürür. Səthlərdən biri
@@ -500,7 +539,6 @@ kilid ekranı hostu cihazda təsdiqlənmədi.
 
 ## 10. Yol xəritəsi
 
-* Shizuku ilə sükutla yeniləmə (root olmadan `pm install`)
 * Android Auto / Wear OS bildirişi
 * Orta sürət bölmələri üçün OSM `relation` dəstəyi (real giriş-çıxış cütləri)
 * Xəritədə radar heatmap + "yoldaş rejimi"

@@ -92,3 +92,12 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Shizuku lets the driver lend NexRadar the shell's identity, which is the
+    // only non-root way left to install an update without the system installer
+    // dialog. Both artefacts are optional at runtime: when Shizuku is missing
+    // (the normal case) the updater uses the ordinary installer.
+    implementation("dev.rikka.shizuku:api:12.1.0")
+    implementation("dev.rikka.shizuku:provider:12.1.0")
+}

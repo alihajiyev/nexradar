@@ -8,7 +8,7 @@ class AppConstants {
   // ---------------------------------------------------------------- identity
   static const String appName = 'NexRadar';
   static const String appTagline = 'Arxa fonda işləyən radar & sürət HUD';
-  static const String appVersion = '1.3.0';
+  static const String appVersion = '1.4.0';
 
   // -------------------------------------------------------------- persistence
   static const String dbName = 'nex_radar.db';

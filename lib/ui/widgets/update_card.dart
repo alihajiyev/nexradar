@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -35,12 +36,23 @@ class _UpdateCardState extends State<UpdateCard> {
   ReleaseInfo? _release;
   double _progress = 0;
 
+  /// Silent updates are possible only with Shizuku; it is checked once per
+  /// build of this card and defaults to "not available".
+  ShizukuState _shizuku = const ShizukuState();
+
   UpdateService get updates => widget.services.updates;
 
   @override
   void initState() {
     super.initState();
     _loadInstalled();
+    unawaited(_loadShizuku());
+  }
+
+  Future<void> _loadShizuku() async {
+    final ShizukuState state = await updates.shizukuState();
+    if (!mounted) return;
+    setState(() => _shizuku = state);
   }
 
   Future<void> _loadInstalled() async {
@@ -85,6 +97,28 @@ class _UpdateCardState extends State<UpdateCard> {
         },
       );
       if (!mounted) return;
+
+      // The silent route is taken only when it is genuinely available; any
+      // failure falls through to the installer rather than leaving the driver
+      // with an error and no update.
+      if (chooseInstallRoute(_shizuku) == InstallRoute.silent) {
+        setState(() {
+          _phase = _Phase.handingOff;
+          _message = 'Sükutla quraşdırılır…';
+        });
+        final SilentInstallResult silent =
+            await updates.installApkViaShizuku(path);
+        if (!mounted) return;
+        if (silent.ok) {
+          setState(() {
+            _phase = _Phase.idle;
+            _message = 'Yeniləmə sükutla quraşdırıldı.';
+          });
+          _notify('Yeniləmə quraşdırıldı');
+          return;
+        }
+        _notify('Sükutla quraşdırılmadı — qurşadırıcı açılır');
+      }
 
       setState(() {
         _phase = _Phase.handingOff;

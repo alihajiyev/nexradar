@@ -28,6 +28,11 @@
          downloads the new build and hands it to the system installer. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Brings the bubble back after a reboot, when the driver had it switched
+         on. BOOT_COMPLETED is one of the documented exemptions that allow a
+         foreground service to be started from the background. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <uses-feature
         android:name="android.hardware.location.gps"
         android:required="false" />
@@ -111,6 +116,30 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- Restores the bubble after a restart. Does nothing when the driver had
+             switched it off. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Shizuku, when the driver has it: lends the app the shell's identity so
+             an update installs itself without the system installer dialog. Its
+             absence is a normal state, not an error — the updater falls back to
+             the ordinary installer. -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
@@ -128,5 +157,8 @@
             <action android:name="android.intent.action.PROCESS_TEXT" />
             <data android:mimeType="text/plain" />
         </intent>
+        <!-- Android 11+ package visibility: the app must be able to see whether
+             Shizuku is installed before it can offer silent updates. -->
+        <package android:name="moe.shizuku.privileged.api" />
     </queries>
 </manifest>

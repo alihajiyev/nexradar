@@ -10,6 +10,44 @@ import 'settings_service.dart';
 
 /// A published GitHub Release that carries an installable APK.
 @immutable
+/// Whether silent updates are possible on this phone.
+///
+/// [usable] is the only question that matters, and it is deliberately strict:
+/// Shizuku can be running while NexRadar has not been granted the right to use
+/// it, which is exactly the state where an optimistic install would fail with an
+/// error instead of the installer the driver expects.
+class ShizukuState {
+  const ShizukuState({this.available = false, this.granted = false});
+
+  final bool available;
+  final bool granted;
+
+  bool get usable => available && granted;
+
+  /// True when Shizuku is there but the grant dialog has never been answered.
+  bool get needsGrant => available && !granted;
+
+  @override
+  String toString() => 'ShizukuState(available: $available, granted: $granted)';
+}
+
+class SilentInstallResult {
+  const SilentInstallResult({required this.ok, required this.detail});
+
+  final bool ok;
+  final String detail;
+}
+
+/// Which route an update takes.
+///
+/// Pulled out of the widget so the fallback rule is a testable fact rather than
+/// something buried in a button handler: the silent route is used *only* when it
+/// is genuinely available.
+enum InstallRoute { silent, installer }
+
+InstallRoute chooseInstallRoute(ShizukuState state) =>
+    state.usable ? InstallRoute.silent : InstallRoute.installer;
+
 class ReleaseInfo {
   const ReleaseInfo({
     required this.tag,
@@ -159,6 +197,60 @@ class UpdateService {
     } catch (e) {
       if (kDebugMode) debugPrint('[UpdateService] installApk failed: $e');
       return false;
+    }
+  }
+
+  // ------------------------------------------------------------------ Shizuku
+
+  /// Whether Shizuku is running, and whether NexRadar may use it.
+  ///
+  /// Both false is the normal case: most drivers have never heard of Shizuku,
+  /// and the updater must behave exactly as it always did for them.
+  Future<ShizukuState> shizukuState() async {
+    try {
+      final Map<Object?, Object?>? raw =
+          await _channel.invokeMethod<Map<Object?, Object?>>('shizukuState');
+      return ShizukuState(
+        available: raw?['available'] == true,
+        granted: raw?['granted'] == true,
+      );
+    } catch (_) {
+      return const ShizukuState();
+    }
+  }
+
+  /// Asks for the Shizuku grant. The future completes when the driver answers
+  /// the dialog, which can take as long as he takes.
+  Future<bool> requestShizukuPermission() async {
+    try {
+      return await _channel.invokeMethod<bool>('requestShizukuPermission') ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Installs the downloaded APK with no dialog at all.
+  ///
+  /// A false [SilentInstallResult.ok] is not an error the driver should see: it
+  /// means the silent route was unavailable, and the caller falls back to the
+  /// system installer he already knows.
+  Future<SilentInstallResult> installApkViaShizuku(String path) async {
+    try {
+      final Map<Object?, Object?>? raw = await _channel
+              .invokeMethod<Map<Object?, Object?>>(
+            'installApkViaShizuku',
+            <String, Object?>{'path': path},
+          );
+      if (raw == null) {
+        return const SilentInstallResult(ok: false, detail: 'cavab yoxdur');
+      }
+      return SilentInstallResult(
+        ok: raw['ok'] == true,
+        detail: (raw['detail'] as String?) ?? '',
+      );
+    } catch (e) {
+      return SilentInstallResult(ok: false, detail: '$e');
     }
   }
 

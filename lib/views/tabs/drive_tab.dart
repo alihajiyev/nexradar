@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/location/average_speed_tracker.dart';
 import '../../core/services/crowdsourced_radar_service.dart';
+import '../../core/services/drive_report.dart';
 import '../../core/services/osm_sync_service.dart';
 import '../../core/services/radar_engine.dart';
 import '../../core/services/update_service.dart';
@@ -178,6 +179,8 @@ class _DriveTabState extends State<DriveTab> {
                 onSync: () => _guard(_sync),
                 onPreview: () => _showBubblePreview(state),
               ),
+              const SizedBox(height: NexSpace.md),
+              _SessionCard(report: engine.report),
               const SizedBox(height: NexSpace.md),
               _LogCard(services: services, engine: engine),
               const SizedBox(height: NexSpace.md),
@@ -715,6 +718,127 @@ class _QuickActions extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
+
+/// The drive so far, in six numbers.
+///
+/// The dashboard answers "what is happening now"; this answers "how did it go"
+/// without the driver opening anything. It keeps counting while the app is
+/// closed, because the pipeline it reads does.
+class _SessionCard extends StatelessWidget {
+  const _SessionCard({required this.report});
+
+  final DriveReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool clean = report.overLimitSeconds == 0;
+    final Color tone = report.isEmpty
+        ? NexColors.textMid
+        : (clean ? NexColors.primary : NexColors.amber);
+
+    return NexCard(
+      accent: report.isEmpty ? null : tone,
+      tintStrength: 0.05,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              NexIconBadge(
+                icon: clean
+                    ? Icons.verified_rounded
+                    : Icons.speed_rounded,
+                color: tone,
+                size: 40,
+              ),
+              const SizedBox(width: NexSpace.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text('Sürüş hesabatı', style: NexText.bodyStrong),
+                    const SizedBox(height: 3),
+                    Text(report.verdict, style: NexText.caption),
+                  ],
+                ),
+              ),
+              if (!report.isEmpty)
+                StatusPill(
+                  dense: true,
+                  label: report.durationLabel,
+                  color: NexColors.textMid,
+                ),
+            ],
+          ),
+          if (!report.isEmpty) ...<Widget>[
+            const SizedBox(height: NexSpace.sm),
+            NexDivider(),
+            const SizedBox(height: NexSpace.xs),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: StatBlock(
+                    value: report.distanceLabel,
+                    label: 'Məsafə',
+                    icon: Icons.route_rounded,
+                  ),
+                ),
+                _VDivider(),
+                Expanded(
+                  child: StatBlock(
+                    value: report.averageSpeedLabel,
+                    label: 'Orta km/s',
+                    accent: NexColors.cyan,
+                    icon: Icons.timeline_rounded,
+                  ),
+                ),
+                _VDivider(),
+                Expanded(
+                  child: StatBlock(
+                    value: report.maxSpeedLabel,
+                    label: 'Maksimum',
+                    accent: clean ? NexColors.primary : NexColors.amber,
+                    icon: Icons.speed_rounded,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: NexSpace.sm),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: StatBlock(
+                    value: '${report.announcements}',
+                    label: 'Anons',
+                    icon: Icons.record_voice_over_rounded,
+                  ),
+                ),
+                _VDivider(),
+                Expanded(
+                  child: StatBlock(
+                    value: '${report.radarsPassed}',
+                    label: 'Keçilən radar',
+                    accent: NexColors.amber,
+                    icon: Icons.radar_rounded,
+                  ),
+                ),
+                _VDivider(),
+                Expanded(
+                  child: StatBlock(
+                    value: clean ? '0' : report.overLimitLabel,
+                    label: 'Limit üstü',
+                    accent: clean ? NexColors.primary : NexColors.danger,
+                    icon: Icons.trending_up_rounded,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
 
 class _LogCard extends StatelessWidget {
   const _LogCard({required this.services, required this.engine});

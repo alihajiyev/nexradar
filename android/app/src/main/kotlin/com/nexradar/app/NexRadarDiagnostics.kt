@@ -120,6 +120,10 @@ object NexRadarDiagnostics {
         "lockHudEnabled" to lockHudEnabled(context),
         "notificationsEnabled" to NotificationManagerCompat.from(context).areNotificationsEnabled(),
         "installGranted" to canInstallPackages(context),
+        // Optional fast path for updates: false on almost every phone, and never
+        // an error — the updater just falls back to the system installer.
+        "shizukuAvailable" to ShizukuInstaller.isAvailable(),
+        "shizukuGranted" to ShizukuInstaller.hasPermission(),
         "batteryOptimized" to isBatteryOptimized(context),
         "standbyBucket" to standbyBucket(context),
         "fineLocationGranted" to granted(context, android.Manifest.permission.ACCESS_FINE_LOCATION),

@@ -402,6 +402,12 @@ class _BackgroundCard extends StatelessWidget {
           _flag('Batareya optimallaşdırması', !n.batteryOptimized,
               detail: n.batteryOptimized ? 'söndürülməlidir' : null),
           _flag('Arxa fon konumu', n.backgroundLocationGranted),
+          // Not a problem when false: most phones have no Shizuku, and the
+          // updater simply uses the system installer.
+          _flag('Sükutla yeniləmə (Shizuku)', n.silentUpdate,
+              detail: n.shizukuAvailable
+                  ? (n.shizukuGranted ? 'aktiv' : 'icazə gözləyir')
+                  : 'yoxdur — qurşadırıcı işlədilir'),
         ],
       ),
     );

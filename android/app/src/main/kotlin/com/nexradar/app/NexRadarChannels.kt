@@ -197,6 +197,34 @@ object NexRadarChannels {
 
             "canInstallPackages" -> result.success(canInstallPackages(context))
 
+            // ------------------------------------------------------ Shizuku
+
+            "shizukuState" -> result.success(
+                mapOf(
+                    "available" to ShizukuInstaller.isAvailable(),
+                    "granted" to ShizukuInstaller.hasPermission(),
+                ),
+            )
+
+            "requestShizukuPermission" -> {
+                // Answers only when the driver has made a choice, which may be
+                // many seconds later — the Dart future simply waits.
+                ShizukuInstaller.requestPermission { granted -> result.success(granted) }
+            }
+
+            "installApkViaShizuku" -> {
+                val path = asMap(call.arguments)["path"] as? String
+                if (path.isNullOrBlank()) {
+                    result.error("NEXRADAR_ERROR", "path is empty", null)
+                    return
+                }
+                ShizukuInstaller.install(path) { outcome ->
+                    result.success(
+                        mapOf("ok" to outcome.ok, "detail" to outcome.detail),
+                    )
+                }
+            }
+
             "openInstallPermissionSettings" -> {
                 start(context, installPermissionIntent(context))
                 result.success(null)

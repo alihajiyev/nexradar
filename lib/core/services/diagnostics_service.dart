@@ -155,6 +155,8 @@ class NativeDiagnostics {
     required this.installGranted,
     required this.lastHeartbeatAt,
     required this.sessionStartedAt,
+    this.shizukuAvailable = false,
+    this.shizukuGranted = false,
   });
 
   final String deviceModel;
@@ -178,6 +180,10 @@ class NativeDiagnostics {
   final bool installGranted;
   final bool batteryOptimized;
 
+  /// Optional fast path for in-app updates. False is the normal state.
+  final bool shizukuAvailable;
+  final bool shizukuGranted;
+
   /// Doze standby bucket, or -1 when unknown. 45 (`NEVER`) and 5 (`RESTRICTED`)
   /// are the two values that mean "Android has forbidden background work".
   final int standbyBucket;
@@ -191,6 +197,9 @@ class NativeDiagnostics {
   final DateTime? sessionStartedAt;
 
   bool get isRestrictedBucket => standbyBucket == 45 || standbyBucket == 5;
+
+  /// Silently install updates, with no installer dialog.
+  bool get silentUpdate => shizukuAvailable && shizukuGranted;
 
   /// Whole list of the things that silently break the background, in the order
   /// they matter.
@@ -262,6 +271,8 @@ class NativeDiagnostics {
           map['notificationPermissionGranted'] == true,
       lastHeartbeatAt: time(map['lastHeartbeatMs']),
       sessionStartedAt: time(map['sessionStartedAt']),
+      shizukuAvailable: map['shizukuAvailable'] == true,
+      shizukuGranted: map['shizukuGranted'] == true,
     );
   }
 

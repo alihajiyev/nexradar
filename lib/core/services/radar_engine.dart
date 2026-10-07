@@ -17,6 +17,7 @@ import '../location/speed_interpolator.dart';
 import 'alert_service.dart';
 import 'crowdsourced_radar_service.dart';
 import 'diagnostics_service.dart';
+import 'drive_report.dart';
 import 'osm_sync_service.dart';
 import 'overlay_service.dart';
 import 'settings_service.dart';
@@ -131,6 +132,30 @@ class RadarEngine {
   AverageSpeedReading? _averageReading;
   DateTime _lastSectionWarnAt = DateTime.fromMillisecondsSinceEpoch(0);
 
+  // ------------------------------------------------------------ session totals
+  //
+  // Kept for the whole drive, not for the last frame: these are the numbers that
+  // answer "was I alright?" after a trip, and they keep counting while the app
+  // is closed, because the pipeline does.
+  double _odometerMeters = 0;
+  double _maxSpeedKmh = 0;
+  int _overLimitSeconds = 0;
+  final Set<String> _passedRadarKeys = <String>{};
+  DateTime _lastFixWallAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime? _sessionEndedAt;
+
+  /// The drive so far — or the drive that just ended, until the next one starts.
+  DriveReport get report => DriveReport(
+        startedAt: _sessionStarted,
+        endedAt: _sessionEndedAt,
+        distanceMeters: _odometerMeters,
+        maxSpeedKmh: _maxSpeedKmh,
+        overLimitSeconds: _overLimitSeconds,
+        announcements: _announcements,
+        radarsPassed: _passedRadarKeys.length,
+        camerasSeen: _camerasInRange,
+      );
+
   /// The running average of the section the driver is inside, or null when he is
   /// not inside one (or when there is not enough of it behind him yet).
   AverageSpeedReading? get averageReading => _averageReading;
@@ -158,6 +183,11 @@ class RadarEngine {
     if (_running) return;
     _running = true;
     _sessionStarted = DateTime.now();
+    _sessionEndedAt = null;
+    _odometerMeters = 0;
+    _maxSpeedKmh = 0;
+    _overLimitSeconds = 0;
+    _passedRadarKeys.clear();
     _appendLog('Mühərrik işə salındı');
     Diag.event('engine', 'started (background: $background)');
 
@@ -197,6 +227,7 @@ class RadarEngine {
     corridor.reset();
     averageSpeed.leave();
     _averageReading = null;
+    _sessionEndedAt = DateTime.now();
     await tts.stop();
     await alerts.stopAll();
     await overlay.hide();
@@ -249,8 +280,32 @@ class RadarEngine {
       camerasInRange: _cache.length,
     );
 
-    _lastFixAt = DateTime.now();
+    final DateTime fixWall = DateTime.now();
+    final Duration sinceLastFix = _lastFixWallAt.millisecondsSinceEpoch == 0
+        ? Duration.zero
+        : fixWall.difference(_lastFixWallAt);
+    _lastFixWallAt = fixWall;
+    _lastFixAt = fixWall;
     _camerasInRange = _cache.length;
+
+    // Session totals. A gap longer than a minute is a tunnel or a lost signal,
+    // not time spent speeding, so it is excluded from the over-limit total.
+    if (_previous != null) {
+      final double moved = HeadingCalculator.haversineMeters(
+        _previous!.latitude,
+        _previous!.longitude,
+        p.latitude,
+        p.longitude,
+      );
+      // Ignore GPS jumps: a fix that moved further than any car could.
+      if (moved < 1500) _odometerMeters += moved;
+    }
+    if (kmh > _maxSpeedKmh) _maxSpeedKmh = kmh;
+    if (state.value.isSpeeding &&
+        sinceLastFix.inSeconds <= 60 &&
+        sinceLastFix.inSeconds > 0) {
+      _overLimitSeconds += sinceLastFix.inSeconds;
+    }
     interpolator.setTarget(kmh);
     if (!_hadFix) {
       // First fix: jump straight to the value, no sweep from zero.
@@ -413,6 +468,10 @@ class RadarEngine {
 
     // An average-speed marker starts a section when it goes *behind* the car,
     // not when it appears ahead: the clock must not include the approach.
+    // Passed = it is now behind us. Counted once per camera, so a radar the
+    // driver drives past twice in one trip is one radar.
+    if (!closing) _passedRadarKeys.add(camera.identityKey);
+
     if (camera.type == CameraType.averageSpeed && !closing) {
       final bool opened = averageSpeed.enter(
         cameraKey: camera.identityKey,

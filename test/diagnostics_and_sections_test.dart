@@ -2,6 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nex_radar/core/constants/app_constants.dart';
 import 'package:nex_radar/core/location/average_speed_tracker.dart';
 import 'package:nex_radar/core/services/diagnostics_service.dart';
+import 'package:nex_radar/core/services/drive_report.dart';
+import 'package:nex_radar/core/services/update_service.dart';
 import 'package:nex_radar/core/services/tts_service.dart';
 
 void main() {
@@ -348,6 +350,143 @@ void main() {
         PhraseBook.sectionAverage('ru-RU', averageKmh: 96, limitKmh: 80),
         contains('средняя'),
       );
+    });
+  });
+
+  // ------------------------------------------------------------ silent updates
+
+  group('silent update routing', () {
+    test('no Shizuku at all keeps the system installer', () {
+      const ShizukuState state = ShizukuState();
+      expect(state.usable, isFalse);
+      expect(state.needsGrant, isFalse);
+      expect(chooseInstallRoute(state), InstallRoute.installer);
+    });
+
+    test('Shizuku without the grant still uses the system installer', () {
+      const ShizukuState state = ShizukuState(available: true);
+      expect(state.needsGrant, isTrue);
+      expect(
+        chooseInstallRoute(state),
+        InstallRoute.installer,
+        reason: 'an optimistic silent install would fail with an error instead '
+            'of the dialog the driver expects',
+      );
+    });
+
+    test('granted Shizuku installs silently', () {
+      const ShizukuState state =
+          ShizukuState(available: true, granted: true);
+      expect(state.usable, isTrue);
+      expect(chooseInstallRoute(state), InstallRoute.silent);
+    });
+
+    test('a grant without a running service is not enough', () {
+      const ShizukuState state = ShizukuState(granted: true);
+      expect(state.usable, isFalse);
+      expect(chooseInstallRoute(state), InstallRoute.installer);
+    });
+  });
+
+  // -------------------------------------------------------------- drive report
+
+  group('DriveReport', () {
+    final DateTime start = DateTime(2026, 10, 7, 8, 0, 0);
+
+    DriveReport build({
+      double meters = 10000,
+      Duration drive = const Duration(minutes: 10),
+      double maxSpeed = 96,
+      int overLimit = 0,
+      int announcements = 3,
+      int passed = 2,
+    }) =>
+        DriveReport(
+          startedAt: start,
+          endedAt: start.add(drive),
+          distanceMeters: meters,
+          maxSpeedKmh: maxSpeed,
+          overLimitSeconds: overLimit,
+          announcements: announcements,
+          radarsPassed: passed,
+          camerasSeen: 12,
+        );
+
+    test('an untouched engine reports nothing', () {
+      final DriveReport report = DriveReport.empty();
+      expect(report.isEmpty, isTrue);
+      expect(report.elapsed, Duration.zero);
+      expect(report.averageSpeedKmh, 0);
+      expect(report.verdict, 'Hələ sürüş qeydə alınmayıb');
+    });
+
+    test('average speed is distance over time, like the camera computes it', () {
+      // 10 km in 10 minutes is 60 km/h.
+      expect(build().averageSpeedKmh, closeTo(60, 0.01));
+      expect(build().averageSpeedLabel, '60');
+      expect(build().distanceLabel, '10.0 km');
+      expect(build().durationLabel, '10 dəq 0 san');
+    });
+
+    test('a clean drive says so', () {
+      final DriveReport report = build();
+      expect(report.overLimitShare, 0);
+      expect(report.verdict, contains('Təmiz sürüş'));
+      expect(report.timeline, contains('Keçilən radar: 2'));
+      expect(report.timeline.any((String l) => l.startsWith('Limit üstü')),
+          isFalse);
+    });
+
+    test('a brief overshoot is reported without alarm', () {
+      // 30 s over the limit out of 10 minutes is 5%. 29 s is under the 5% line.
+      final DriveReport report = build(overLimit: 20);
+      expect(report.overLimitShare, closeTo(0.033, 0.005));
+      expect(report.verdict, contains('Yaxşı sürüş'));
+      expect(report.verdict, contains('20 san'));
+    });
+
+    test('a long overshoot is quantified, not scolded', () {
+      final DriveReport report = build(overLimit: 180);
+      expect(report.overLimitShare, closeTo(0.3, 0.01));
+      expect(report.verdict, contains('3 dəq 0 san'));
+      expect(report.verdict, contains('30%'));
+      expect(report.overLimitLabel, '3 dəq 0 san');
+    });
+
+    test('a drive that never moved says so instead of averaging zero', () {
+      final DriveReport report = build(meters: 20);
+      expect(report.isMoving, isFalse);
+      expect(report.verdict, contains('hərəkət yoxdur'));
+    });
+
+    test('an open drive keeps counting from the start', () {
+      final DriveReport report = DriveReport(
+        startedAt: DateTime.now().subtract(const Duration(minutes: 2)),
+        endedAt: null,
+        distanceMeters: 1500,
+        maxSpeedKmh: 70,
+        overLimitSeconds: 0,
+        announcements: 1,
+        radarsPassed: 1,
+        camerasSeen: 5,
+      );
+      expect(report.elapsed.inMinutes, 2);
+      expect(report.distanceLabel, '1.5 km');
+    });
+
+    test('a clock that runs backwards cannot produce a negative drive', () {
+      final DriveReport report = DriveReport(
+        startedAt: start,
+        endedAt: start.subtract(const Duration(minutes: 5)),
+        distanceMeters: 500,
+        maxSpeedKmh: 40,
+        overLimitSeconds: 0,
+        announcements: 0,
+        radarsPassed: 0,
+        camerasSeen: 0,
+      );
+      expect(report.elapsed, Duration.zero);
+      expect(report.averageSpeedKmh, 0);
     });
   });
 }
