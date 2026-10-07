@@ -1,0 +1,89 @@
+# Builds the release APK and attaches it to a GitHub Release.
+#
+# This is the other half of the in-app updater: pushing a version tag is the
+# only step needed to ship a new build. The app itself then finds the new
+# release through the GitHub API and installs it, so no APK ever has to be moved
+# to the phone by hand again.
+#
+#   git tag v1.1.0 && git push origin v1.1.0
+#
+# The asset is always named `NexRadar.apk` (the updater takes the first `.apk`
+# asset of the latest release, so the name is not load-bearing).
+
+name: Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          # Pinned so a new stable release cannot change the shipped binary.
+          flutter-version: '3.47.5'
+          channel: stable
+          cache: true
+
+      - name: Install Android SDK packages
+        run: |
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          yes | "${SDKMANAGER}" --licenses > /dev/null 2>&1 || true
+          "${SDKMANAGER}" "platforms;android-37" "build-tools;36.0.0" "ndk;28.2.13676358"
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        # Golden comparisons are host-specific (font rasteriser), so they stay
+        # on the developer machine.
+        run: flutter test --exclude-tags golden
+
+      - name: Build release APK
+        run: |
+          flutter build apk --release \
+            --dart-define=NEX_RADAR_REPO=${{ github.repository }}
+
+      - name: Stage the artifact
+        run: cp build/app/outputs/flutter-apk/app-release.apk NexRadar.apk
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexRadar-apk
+          path: NexRadar.apk
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: NexRadar.apk
+          generate_release_notes: true
+          fail_on_unmatched_files: true

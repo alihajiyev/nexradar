@@ -1,0 +1,30 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- A radar sweep: a dot with three arcs, all in a single white tint so it
+         renders correctly as a status-bar icon on every Android version. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,10.5m-2,0a2,2 0,1 1,4 0a2,2 0,1 1,-4 0" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.6"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:pathData="M7.4,6.4A7.5,7.5 0,0 0,4.5 12" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.6"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:pathData="M16.6,6.4A7.5,7.5 0,0 1,19.5 12" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.6"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:pathData="M12,12 L18.2,17.6" />
+</vector>

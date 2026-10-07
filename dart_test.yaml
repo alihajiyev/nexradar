@@ -1,0 +1,11 @@
+# Golden (pixel) comparisons are captured on the developer's machine and are
+# sensitive to the host font rasteriser, so they are opt-out:
+#
+#   flutter test                        # everything, goldens verified
+#   flutter test --exclude-tags golden  # what CI runs
+#
+tags:
+  golden:
+    description: >-
+      Pixel comparisons against test/goldens/*.png. Re-capture with
+      `flutter test --update-goldens test/golden_test.dart`.

@@ -1,0 +1,38 @@
+# --- Flutter / Dart ---------------------------------------------------------
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+.vscode/
+
+# --- Android ----------------------------------------------------------------
+android/.gradle/
+android/local.properties
+android/key.properties
+android/app/debug/
+android/app/profile/
+android/app/release/
+*.jks
+*.keystore
+
+# --- Release artifacts ------------------------------------------------------
+# The APK is published as a GitHub Release asset (and pulled down by the in-app
+# updater). It is ~55 MB of binary, so it never goes into git history.
+*.apk
+*.aab
+
+# --- Test output ------------------------------------------------------------
+test/failures/
+test/**/failures/
+
+# --- Tooling / scratch ------------------------------------------------------
+.freebuff/
+*.log
+
+# --- OS ---------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini

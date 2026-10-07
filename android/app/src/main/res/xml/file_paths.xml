@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Paths the update installer may read through `content://…fileprovider`.
+
+  Only `cacheDir/updates/` is exposed: the downloaded APK is the single file the
+  system installer ever needs, so nothing else from the app's storage is
+  reachable.
+-->
+<paths>
+    <cache-path name="updates" path="updates/" />
+    <external-cache-path name="external_updates" path="updates/" />
+</paths>
