@@ -8,8 +8,10 @@ import '../../models/vehicle_state.dart';
 import '../constants/app_constants.dart';
 import '../constants/camera_types.dart';
 import '../database/camera_repository.dart';
+import '../location/approach_ladder.dart';
 import '../location/heading_calculator.dart';
 import '../location/location_service.dart';
+import '../location/route_corridor.dart';
 import '../location/speed_interpolator.dart';
 import 'alert_service.dart';
 import 'crowdsourced_radar_service.dart';
@@ -23,18 +25,21 @@ import 'tts_service.dart';
 /// Pipeline, once per GPS fix (≈1 Hz):
 ///
 /// ```
-/// GPS ─▶ heading ─▶ local cache (2 km, SQLite + haversine)
-///                   └─▶ angular target filter  |θ_heading − θ_camera| ≤ 45°
-///                        └─▶ nearest forward threat
-///                             ├─▶ VehicleState (status / limit / remaining)
-///                             ├─▶ native overlay payload
-///                             ├─▶ TTS ladder   400 m → 150 m
-///                             └─▶ beep ladder  500 m → 200 m / speeding
+/// GPS ─▶ driven track (corridor) ─▶ stable course over ground
+///       └─▶ local cache (5 km, SQLite + haversine)
+///            └─▶ angular target filter  |θ_heading − θ_camera| ≤ 45°
+///                 └─▶ on-my-road filter  (corridor ≤ 150 m)
+///                      └─▶ nearest forward threat
+///                           ├─▶ VehicleState (status / limit / remaining)
+///                           ├─▶ native overlay payload
+///                           ├─▶ TTS ladder   1 km → 500 m → 200 m
+///                           └─▶ beep ladder  500 m → 200 m / speeding
 /// ```
 ///
-/// Between fixes, [onFrame] advances the 60 FPS interpolation so the needle
-/// glides instead of stepping, and forwards the smoothed value to the floating
-/// bubble.
+/// [tick] advances the interpolation so the needle glides instead of stepping and
+/// forwards the smoothed value to the floating bubble. It is driven both by the
+/// dashboard's frame ticker *and* by the engine's own pump, so the bubble keeps
+/// moving with no UI attached — which is the normal state of affairs in a car.
 class RadarEngine {
   RadarEngine({
     required this.repository,
@@ -67,8 +72,22 @@ class RadarEngine {
   final ValueNotifier<List<EngineLogEntry>> log =
       ValueNotifier<List<EngineLogEntry>>(const <EngineLogEntry>[]);
 
+  /// The road the driver is actually on: a stable course plus the "is that
+  /// radar on my road" test. See [RouteCorridor].
+  final RouteCorridor corridor = RouteCorridor();
+
   StreamSubscription<Position>? _positionSub;
   Timer? _communityTimer;
+  Timer? _pump;
+
+  /// Wall clock of the last [tick], so the interpolation step is the real
+  /// elapsed time no matter who drove it.
+  DateTime _lastTickAt = DateTime.now();
+
+  /// How fast the engine pumps itself when no UI is attached. Ten times the GPS
+  /// cadence is far more than the exponential filter needs, and cheap enough to
+  /// leave running while the screen is off.
+  static const Duration pumpInterval = Duration(milliseconds: 100);
 
   bool _running = false;
   bool get isRunning => _running;
@@ -87,7 +106,6 @@ class RadarEngine {
   /// Lowest distance we have seen per camera, so we only announce *crossings*
   /// (and a later revisit re-announces).
   final Map<String, double> _lastDistance = <String, double>{};
-  final Set<String> _spokenSlowDown = <String>{};
 
   DateTime _lastOverlayPush = DateTime.fromMillisecondsSinceEpoch(0);
   String _lastPushedSignature = '';
@@ -114,6 +132,13 @@ class RadarEngine {
       (_) => unawaited(refreshCommunity()),
     );
 
+    // The engine's own clock. The dashboard's ticker calls [tick] too, but with
+    // the task swiped away there is no ticker at all — and the bubble would then
+    // keep chasing a smoothed speed that never moved.
+    _lastTickAt = DateTime.now();
+    _pump?.cancel();
+    _pump = Timer.periodic(pumpInterval, (_) => tick());
+
     final Position? last = await locationService.lastKnown();
     if (last != null) {
       await _onPosition(last);
@@ -126,6 +151,9 @@ class RadarEngine {
     _positionSub = null;
     _communityTimer?.cancel();
     _communityTimer = null;
+    _pump?.cancel();
+    _pump = null;
+    corridor.reset();
     await tts.stop();
     await alerts.stopAll();
     await overlay.hide();
@@ -140,7 +168,10 @@ class RadarEngine {
     // A fix with no speed at all is useless for a speedometer; keep the last
     // known one but do not treat it as a new sample.
     final double kmh = LocationService.kmh(p);
+    corridor.addFix(p.latitude, p.longitude);
     _heading = _computeHeading(p);
+    // The corridor must be extended before any radar is measured against it.
+    corridor.prepare(courseDegreesOfTravel: _heading);
     _previous = p;
 
     await _refreshCacheIfStale(p.latitude, p.longitude);
@@ -189,9 +220,19 @@ class RadarEngine {
     await _maybePushToOverlay(force: true);
   }
 
-  /// GPS `heading` is only trustworthy while actually moving; when it is not we
-  /// derive the bearing from consecutive fixes, then low-pass the result so the
-  /// angular filter does not twitch.
+  /// Where the car is *going*, not merely which way the nose is pointing.
+  ///
+  /// Preference order:
+  ///
+  /// 1. **the driven line** — the bearing across the last ~60 m of road the car
+  ///    actually travelled. Stable through a curve and through a traffic jam,
+  ///    which is what stops radars from the next street from drifting into the
+  ///    cone every time the GPS heading twitches.
+  /// 2. the GPS `heading` field, but only while genuinely moving.
+  /// 3. the bearing between the last two fixes.
+  ///
+  /// The last two are low-passed so the angular filter never jumps at the
+  /// 0°/360° seam.
   double _computeHeading(Position p) {
     double candidate = _heading;
     if (p.heading >= 0 && p.heading < 360 && p.speed > 1.5) {
@@ -212,6 +253,10 @@ class RadarEngine {
         );
       }
     }
+
+    final double? road = corridor.courseDegrees();
+    if (road != null) return road;
+
     // Circular exponential smoothing (never average across the 0°/360° seam).
     final double delta = _signedAngleDelta(candidate, _heading);
     return HeadingCalculator.normalizeDegrees(_heading + delta * 0.45);
@@ -248,11 +293,16 @@ class RadarEngine {
     if (_lastDistance.isNotEmpty) {
       final Set<String> alive = _cache.map((SpeedCamera c) => c.identityKey).toSet();
       _lastDistance.removeWhere((String k, _) => !alive.contains(k));
-      _spokenSlowDown.removeWhere((String k) => !alive.contains(k));
     }
   }
 
-  /// Applies the angular target filter; result is sorted by distance.
+  /// Applies the angular target filter and the on-my-road filter; result is
+  /// sorted by distance.
+  ///
+  /// The angular test alone still lets through cameras that are inside the cone
+  /// but on a different road — a parallel street, a side road 200 m ahead, the
+  /// far carriageway of an interchange. The corridor removes those, but only
+  /// when it is confident: with no track yet it answers "keep it".
   List<SpeedCamera> _forwardThreats({
     required double latitude,
     required double longitude,
@@ -274,9 +324,11 @@ class RadarEngine {
         cameraDirection: c.directionBearing,
         toleranceDegrees: settings.angularTolerance,
       );
-      if (ahead) {
-        out.add(c);
+      if (!ahead) continue;
+      if (!corridor.isOnRoute(latitude: c.latitude, longitude: c.longitude)) {
+        continue;
       }
+      out.add(c);
     }
     out.sort((SpeedCamera a, SpeedCamera b) =>
         (a.distanceMeters ?? double.infinity)
@@ -286,31 +338,41 @@ class RadarEngine {
 
   // ----------------------------------------------------------- alert ladder
 
+  /// The alert ladder: 1 km, 500 m, 200 m.
+  ///
+  /// A gate is announced when it is **crossed**, never when it is merely
+  /// satisfied, and a radar that is already inside a gate the first time we see
+  /// it is recorded in silence. Both rules exist to kill the same complaint: a
+  /// community report popping up next to the car used to trigger "radar 0 metres
+  /// away", which tells the driver nothing he can act on.
   void _evaluateAlerts(VehicleState s) {
     final SpeedCamera? camera = s.threat;
     final double? distance = s.threatDistanceMeters;
     if (camera == null || distance == null) return;
 
-    final String key = camera.identityKey;
-    final double? previous = _lastDistance[key];
-    _lastDistance[key] = distance;
+    final double? previous = _lastDistance[camera.identityKey];
+    _lastDistance[camera.identityKey] = distance;
 
-    final bool closing = previous == null || distance < previous;
+    // First sighting: whatever gates it already sits inside were passed before
+    // we knew it existed. Record the distance and stay quiet.
+    if (previous == null) return;
 
-    // --- voice ladder (crossing detection, so each gate fires exactly once) --
-    if (settings.voiceEnabled) {
-      final bool crossedFar = previous == null
-          ? distance <= AppConstants.voiceFarMeters
-          : previous > AppConstants.voiceFarMeters &&
-              distance <= AppConstants.voiceFarMeters;
-      final bool crossedNear = previous == null
-          ? distance <= AppConstants.voiceNearMeters
-          : previous > AppConstants.voiceNearMeters &&
-              distance <= AppConstants.voiceNearMeters;
+    final bool closing = distance < previous;
+    final double? crossed =
+        ApproachLadder.crossedGate(previous: previous, distance: distance);
 
-      if (crossedFar) {
-        _appendLog('${camera.type.wire} radar ${distance.round()} m '
-            '— hədd ${camera.maxSpeed}');
+    // --- voice ladder --------------------------------------------------------
+    if (crossed != null && settings.voiceEnabled) {
+      _appendLog('${camera.type.wire} radar ${distance.round()} m '
+          '— hədd ${camera.maxSpeed}');
+      if (ApproachLadder.isUrgent(crossed)) {
+        unawaited(
+          tts.announceSlowDown(
+            distanceMeters: distance.round(),
+            limitKmh: camera.maxSpeed,
+          ),
+        );
+      } else {
         unawaited(
           camera.isTemporary
               ? tts.announceCommunityReport(limitKmh: camera.maxSpeed)
@@ -320,21 +382,11 @@ class RadarEngine {
                 ),
         );
       }
-
-      if (crossedNear && !_spokenSlowDown.contains(key)) {
-        _spokenSlowDown.add(key);
-        unawaited(
-          tts.announceSlowDown(
-            distanceMeters: distance.round(),
-            limitKmh: camera.maxSpeed,
-          ),
-        );
-      }
     }
 
     // --- audible/kinetic ladder ---------------------------------------------
     if (settings.beepEnabled && closing) {
-      if (s.isSpeeding && distance <= AppConstants.overlayWarnFarMeters) {
+      if (s.isSpeeding && distance <= AppConstants.gateMidMeters) {
         unawaited(alerts.alarm());
         if (settings.voiceEnabled && s.speedKmh > camera.maxSpeed + 12) {
           unawaited(
@@ -344,9 +396,9 @@ class RadarEngine {
             ),
           );
         }
-      } else if (distance <= AppConstants.overlayWarnNearMeters) {
+      } else if (distance <= AppConstants.gateNearMeters) {
         unawaited(alerts.alarm());
-      } else if (distance <= AppConstants.overlayWarnFarMeters) {
+      } else if (ApproachLadder.isBeepGate(distance)) {
         unawaited(alerts.tick());
       }
     }
@@ -354,11 +406,23 @@ class RadarEngine {
 
   // --------------------------------------------------------------- 60 FPS sim
 
-  /// Call once per rendered frame (drives the in-app gauge). Also forwards a
-  /// throttled payload to the native bubble, which interpolates on its own
-  /// render thread while the app is backgrounded.
-  void onFrame(double dtSeconds) {
-    interpolator.advance(dtSeconds);
+  /// Advances everything that is time-based: the needle interpolation and the
+  /// throttled push to the native bubble.
+  ///
+  /// Safe to call from several places — the dashboard's frame ticker and the
+  /// engine's own [pumpInterval] timer both do — because the step is derived
+  /// from the real elapsed time since the previous call, so the filter can never
+  /// be double-advanced. That is what lets the bubble keep moving with no UI
+  /// attached at all.
+  void tick() {
+    if (!_running) return;
+
+    final DateTime now = DateTime.now();
+    final double dt = now.difference(_lastTickAt).inMicroseconds / 1000000.0;
+    if (dt <= 0) return;
+    _lastTickAt = now;
+
+    interpolator.advance(dt);
 
     final VehicleState current = state.value;
     if ((current.speedKmh - interpolator.current).abs() > 0.02 && current.hasFix) {

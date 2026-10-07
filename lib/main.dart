@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -20,20 +21,34 @@ import 'views/onboarding/onboarding_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      statusBarBrightness: Brightness.dark,
-      systemNavigationBarColor: NexColors.background,
-      systemNavigationBarIconBrightness: Brightness.light,
-    ),
-  );
+  await applyEdgeToEdgeChrome();
 
   final AppServices services = AppServices();
   await services.bootstrap();
   runApp(NexRadarApp(services: services));
+}
+
+/// Edge-to-edge styling, applied on a best-effort basis.
+///
+/// The engine is created by the application, before any activity is attached to
+/// it, so this call finds no platform handler in the background and throws. That
+/// is expected — the styling only means anything once a view exists, and
+/// [_SystemChromeBinder] re-applies it the moment one does.
+Future<void> applyEdgeToEdgeChrome() async {
+  try {
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+        systemNavigationBarColor: NexColors.background,
+        systemNavigationBarIconBrightness: Brightness.light,
+      ),
+    );
+  } catch (e) {
+    if (kDebugMode) debugPrint('[main] system chrome not available yet: $e');
+  }
 }
 
 /// Tiny hand-rolled service locator.
@@ -104,6 +119,15 @@ class AppServices {
     await overlay.refreshRunningState();
     settings.addListener(_onSettingsChanged);
     _ready = true;
+
+    // Background-first: the bubble outlives the dashboard. A process that comes
+    // back with no UI at all — the overlay service restarting after the task was
+    // swiped away, or a sticky restart after process death — has to put the
+    // radar pipeline back to work by itself, because by then the driver is
+    // already on the road.
+    if (settings.overlayEnabled) {
+      unawaited(resumeInBackground());
+    }
 
     // A cold start is the natural moment to look for a new build: the driver is
     // stationary, the screen is on, and a failure costs nothing.
@@ -184,6 +208,28 @@ class AppServices {
     return shown;
   }
 
+  /// Puts the radar pipeline back to work without any UI attached.
+  ///
+  /// Safe to call more than once: everything here is idempotent, and a failure
+  /// (permission revoked while the app was closed, GPS off) is silent by design
+  /// — there is nobody to show a snackbar to.
+  Future<void> resumeInBackground() async {
+    if (!settings.overlayEnabled) return;
+    try {
+      await overlay.refreshRunningState();
+      if (!await locationService.hasPermission()) return;
+      if (!engine.isRunning) await engine.start(background: true);
+      if (!overlay.isRunning) {
+        await overlay.show(
+          scale: settings.overlayScale,
+          showRemaining: settings.showRemaining,
+        );
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('[AppServices] background resume failed: $e');
+    }
+  }
+
   /// Starts the location pipeline + the bubble in one gesture.
   Future<void> startDriving() async {
     final LocationPermissionResult permission =
@@ -223,6 +269,41 @@ class AppServices {
   }
 }
 
+/// Re-applies the edge-to-edge chrome whenever a view exists, and re-checks the
+/// background state whenever the driver comes back.
+class _SystemChromeBinder extends StatefulWidget {
+  const _SystemChromeBinder({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_SystemChromeBinder> createState() => _SystemChromeBinderState();
+}
+
+class _SystemChromeBinderState extends State<_SystemChromeBinder>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(applyEdgeToEdgeChrome());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(applyEdgeToEdgeChrome());
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 class NexRadarApp extends StatelessWidget {
   const NexRadarApp({super.key, required this.services});
 
@@ -230,13 +311,15 @@ class NexRadarApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: AppConstants.appName,
-      debugShowCheckedModeBanner: false,
-      theme: NexTheme.dark(),
-      home: NexRadarScope(
-        services: services,
-        child: _RootGate(services: services),
+    return _SystemChromeBinder(
+      child: MaterialApp(
+        title: AppConstants.appName,
+        debugShowCheckedModeBanner: false,
+        theme: NexTheme.dark(),
+        home: NexRadarScope(
+          services: services,
+          child: _RootGate(services: services),
+        ),
       ),
     );
   }

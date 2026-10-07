@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import '../../models/speed_camera.dart';
+import '../constants/app_constants.dart';
 
 /// All the pure geo math lives here: distance, bearing and the angular target
 /// filter that weeds out oncoming traffic and perpendicular streets.
@@ -115,6 +116,61 @@ class HeadingCalculator {
       toleranceDegrees: toleranceDegrees,
       approachToleranceDegrees: approachToleranceDegrees,
     );
+  }
+
+  /// The point [meters] away from (lat, lon) along [bearingDegrees].
+  ///
+  /// Great-circle destination formula — used to continue the driven corridor
+  /// ahead of the car, so distant radars can be measured against the road the
+  /// driver is on rather than the crow-flight line to them.
+  static List<double> destination(
+    double latitude,
+    double longitude,
+    double bearingDegrees,
+    double meters,
+  ) {
+    final double delta = meters / earthRadiusMeters;
+    final double theta = toRadians(bearingDegrees);
+    final double phi1 = toRadians(latitude);
+    final double lambda1 = toRadians(longitude);
+    final double sinPhi2 = math.sin(phi1) * math.cos(delta) +
+        math.cos(phi1) * math.sin(delta) * math.cos(theta);
+    final double phi2 = math.asin(sinPhi2);
+    final double lambda2 = lambda1 +
+        math.atan2(
+          math.sin(theta) * math.sin(delta) * math.cos(phi1),
+          math.cos(delta) - math.sin(phi1) * sinPhi2,
+        );
+    return <double>[toDegrees(phi2), toDegrees(lambda2)];
+  }
+
+  /// Perpendicular distance from point P to the segment A→B, in meters.
+  ///
+  /// Projected with an equirectangular approximation around A. Over the few
+  /// kilometres a road corridor spans that is accurate far below the GPS noise
+  /// floor, and it keeps the arithmetic — and therefore the tests — readable.
+  static double distanceToSegmentMeters(
+    double pLat,
+    double pLon,
+    double aLat,
+    double aLon,
+    double bLat,
+    double bLon,
+  ) {
+    final double metersPerDegLon =
+        AppConstants.metersPerDegreeLat * math.cos(toRadians(aLat)).abs();
+    final double bx = (bLon - aLon) * metersPerDegLon;
+    final double by = (bLat - aLat) * AppConstants.metersPerDegreeLat;
+    final double px = (pLon - aLon) * metersPerDegLon;
+    final double py = (pLat - aLat) * AppConstants.metersPerDegreeLat;
+
+    final double lengthSq = bx * bx + by * by;
+    if (lengthSq < 1e-9) return math.sqrt(px * px + py * py);
+
+    final double t = ((px * bx + py * by) / lengthSq).clamp(0.0, 1.0);
+    final double dx = px - t * bx;
+    final double dy = py - t * by;
+    return math.sqrt(dx * dx + dy * dy);
   }
 
   /// Lat/lng bounding box used to narrow the SQL query before the precise

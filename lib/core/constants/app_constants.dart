@@ -8,7 +8,7 @@ class AppConstants {
   // ---------------------------------------------------------------- identity
   static const String appName = 'NexRadar';
   static const String appTagline = 'Arxa fonda işləyən radar & sürət HUD';
-  static const String appVersion = '1.1.0';
+  static const String appVersion = '1.2.0';
 
   // -------------------------------------------------------------- persistence
   static const String dbName = 'nex_radar.db';
@@ -34,19 +34,29 @@ class AppConstants {
   /// Extra slack used when we only know where the camera is (no facing angle).
   static const double approachToleranceDegrees = 55.0;
 
-  // ---------------------------------------------------------- overlay alerts
-  /// APPROACHING gate: the bubble turns amber inside this radius.
-  static const double overlayWarnFarMeters = 500.0;
+  // --------------------------------------------------------- approach ladder
+  /// The approach ladder, in meters — one source of truth for the bubble's
+  /// colour, the beeps and the spoken announcements.
+  ///
+  /// * 1000 m — the bubble turns amber and the first sentence plays;
+  /// * 500 m — an audible tick and a second sentence;
+  /// * 200 m — red flasher, alarm, "slow down" sentence.
+  ///
+  /// Listed from far to near. Each gate fires **exactly once per approach and
+  /// only when it is crossed**: a radar that shows up already inside a gate was
+  /// passed before we knew about it, so it is recorded silently instead of
+  /// announced. That is what removes the old "radar 0 metres away" surprise
+  /// when a community report popped up next to the car.
+  static const List<double> approachGatesMeters = <double>[1000.0, 500.0, 200.0];
 
-  /// The "very close" gate — blinking limit + remaining distance.
-  static const double overlayWarnNearMeters = 200.0;
+  /// The amber gate (first of [approachGatesMeters]).
+  static const double gateFarMeters = 1000.0;
 
-  // ------------------------------------------------------------------ voice
-  /// First spoken announcement.
-  static const double voiceFarMeters = 400.0;
+  /// The beep gate.
+  static const double gateMidMeters = 500.0;
 
-  /// Second, urgent announcement.
-  static const double voiceNearMeters = 150.0;
+  /// The red-flasher / alarm gate.
+  static const double gateNearMeters = 200.0;
 
   /// Do not repeat the same sentence faster than this.
   static const Duration voiceCooldown = Duration(seconds: 9);
@@ -126,6 +136,26 @@ class AppConstants {
   static const String prefLastUpdateCheck = 'last_update_check';
   static const String prefPendingUpdate = 'pending_update_version';
   static const String prefLogExpanded = 'log_expanded';
+
+  // ------------------------------------------------------------------ route
+  /// How far off the driven line a radar may sit before it is treated as "not
+  /// on my road" and dropped.
+  ///
+  /// Generous on purpose: a community report is eyeballed within ~20 m and a GPS
+  /// fix is worth another 10 m, so a tight corridor would silently lose real
+  /// radars. 150 m is enough to reject a camera on a parallel street or on the
+  /// far side of an interchange while keeping every radar on the carriageway.
+  static const double routeCorridorToleranceMeters = 150.0;
+
+  /// Spacing of the retained GPS track, and its total length. The track is the
+  /// "where have I been" half of the corridor: long enough to average out the
+  /// GPS jitter, short enough to forget a road we left a while ago.
+  static const double routeTrackSpacingMeters = 15.0;
+  static const double routeTrackMaxMeters = 1200.0;
+
+  /// A course is only trusted once the track is at least this long: below it,
+  /// the raw fix-to-fix heading is the better estimate.
+  static const double routeCourseMinTrackMeters = 60.0;
 
   // ----------------------------------------------------------------- geometry
   /// Meters per degree of latitude (good enough for city-scale filtering).

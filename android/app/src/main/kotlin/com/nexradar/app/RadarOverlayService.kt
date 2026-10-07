@@ -62,8 +62,35 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         startForegroundCompat(buildNotification())
         instance = this
         isRunning = true
+
+        // Make sure the Dart isolate is up. Normally it already is — the engine
+        // is owned by the application — but after a process death Android
+        // restarts this service on its own (START_STICKY), and asking for the
+        // engine here is what brings the GPS stream, the alert ladder and the
+        // bubble back to life without the driver opening the app.
+        NexRadarApplication.of(this).flutterEngine()
+
         syncWindow()
         Log.i(TAG, "overlay service started")
+    }
+
+    /**
+     * The user swiped NexRadar out of the recents list.
+     *
+     * The bubble must stay alive — that is the entire point of a background HUD —
+     * but several OEM task-killers treat a removed task as "this app is done" and
+     * reap the process a moment later. Re-deriving the foreground service from
+     * here re-asserts it on those builds; on stock Android it is a no-op.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.i(TAG, "task removed — bubble stays up")
+        if (OverlayBus.overlayDesired) {
+            runCatching {
+                startForegroundService(Intent(this, RadarOverlayService::class.java))
+            }.onFailure { Log.w(TAG, "could not re-assert the service", it) }
+        }
+        BubbleHost.refresh()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

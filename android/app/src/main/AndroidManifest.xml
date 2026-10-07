@@ -32,9 +32,12 @@
         android:name="android.hardware.location.gps"
         android:required="false" />
 
+    <!-- `.NexRadarApplication` owns the process-wide Flutter engine, so the
+         radar pipeline survives the dashboard being closed and the overlay
+         service being restarted by the system. -->
     <application
         android:label="NexRadar"
-        android:name="${applicationName}"
+        android:name=".NexRadarApplication"
         android:icon="@mipmap/ic_launcher"
         android:enableOnBackInvokedCallback="true">
 

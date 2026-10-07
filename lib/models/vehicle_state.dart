@@ -6,10 +6,10 @@ enum DrivingStatus {
   /// No threat nearby — the bubble shows the speed only.
   idle,
 
-  /// 500 m → 200 m from a confirmed forward threat: amber, blinking limit.
+  /// 1 km → 200 m from a confirmed forward threat: amber, blinking limit.
   approaching,
 
-  /// Inside 200 m, or over the posted limit: red flasher + beep.
+  /// Inside 200 m, or over the posted limit: red flasher + alarm.
   warning;
 
   bool get isThreat => this != DrivingStatus.idle;
@@ -53,8 +53,8 @@ class VehicleState {
 
   final bool hasFix;
 
-  /// How many raw cameras were inside the 2 km circle (before the angle filter)
-  /// — handy for the debug pane.
+  /// How many raw cameras were inside the horizon (before the angle filter) —
+  /// handy for the debug pane.
   final int camerasInRange;
 
   static VehicleState empty() => VehicleState(
@@ -89,10 +89,10 @@ class VehicleState {
   DrivingStatus get status {
     final double? d = threatDistanceMeters;
     if (threat == null || d == null) return DrivingStatus.idle;
-    if (d <= AppConstants.overlayWarnNearMeters || isSpeeding) {
+    if (d <= AppConstants.gateNearMeters || isSpeeding) {
       return DrivingStatus.warning;
     }
-    if (d <= AppConstants.overlayWarnFarMeters) {
+    if (d <= AppConstants.gateFarMeters) {
       return DrivingStatus.approaching;
     }
     return DrivingStatus.idle;

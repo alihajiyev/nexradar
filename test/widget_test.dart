@@ -216,7 +216,7 @@ void main() {
       expect(stateWith(speed: 60).status, DrivingStatus.idle);
     });
 
-    test('approaching inside 500 m', () {
+    test('approaching inside the 1 km gate', () {
       expect(
         stateWith(speed: 60, distance: 420).status,
         DrivingStatus.approaching,

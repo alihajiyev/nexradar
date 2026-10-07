@@ -25,7 +25,6 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final Ticker _ticker;
-  Duration _lastTick = Duration.zero;
 
   int _index = 0;
 
@@ -62,9 +61,9 @@ class _HomeShellState extends State<HomeShell>
   }
 
   void _onTick(Duration elapsed) {
-    final double dt = (elapsed - _lastTick).inMicroseconds / 1000000.0;
-    _lastTick = elapsed;
-    services.engine.onFrame(dt);
+    // The engine owns its own clock (it also pumps itself when no UI is
+    // attached), so this is a nudge, not a time source.
+    services.engine.tick();
   }
 
   void _onNotice() {

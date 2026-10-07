@@ -17,10 +17,12 @@ və qalan məsafəni göstərir; hədd aşıldıqda səslə xəbərdarlıq edir.
 | Ssenari | Davranış |
 | --- | --- |
 | Sürüşürsən, qarşıda radar yoxdur | Baloncuk şəffaf/siyah — yalnız sürət (məs. `65`) görünür |
-| Radara 500–200 m | Baloncuk **sarı/narıncı**: `Limit 80 · 350 m`, limit rəqəmi yanıb-sönür |
-| Radara < 200 m və ya hədd aşılır | **Qırmızı flaşör** + bip + vibrasiya |
-| 400 m qalmış | TTS: *"İrəlidə radar var, sürət həddi 80 kilometr saat, 400 metr qaldı."* |
-| 150 m qalmış | TTS: *"Yavaşlayın, radara 150 metr qaldı!"* |
+| Radara 1 km–200 m | Baloncuk **sarı/narıncı**: `Limit 80 · 350 m`, limit rəqəmi yanıb-sönür |
+| Radara < 200 m və ya hədd aşılır | **Qırmızı flaşör** + həyəcan + vibrasiya |
+| Radara 1 km qalmış | TTS: *"İrəlidə radar var, sürət həddi 80 kilometr saat, 1000 metr qaldı."* |
+| Radara 500 m qalmış | TTS: eyni cümlə, yenilənmiş məsafə ilə; qulaqcıqda **bip** |
+| Radara 200 m qalmış | TTS: *"Yavaşlayın, radara 200 metr qaldı!"* — həyəcan siqnalı |
+| Radar ilk dəfə 200 m-dən yaxında görünürsə | **Heç bir anons yoxdur.** Keçilmiş qapılar səssiz qalır — "0 metr qaldı" xəbərdarlığı mənasızdır |
 | Baloncukda `+`-a toxunmaq | Anlıq mövqe "Mobil YPX" kimi bildirilir, 2 saat canlı qalır |
 | Telefon kilidlənib | Kilid ekranında sürət, limit və radara qalan məsafə görünür — HUD (erişilebilirlik pəncərəsi) və ya rəsmi bildiriş kartı |
 
@@ -37,6 +39,7 @@ lib/
 │   ├── constants/    app_constants.dart · camera_types.dart
 │   ├── database/     db_helper.dart · camera_repository.dart
 │   ├── location/     location_service.dart · heading_calculator.dart · speed_interpolator.dart
+│   │                 route_corridor.dart (yol koridoru) · approach_ladder.dart (1km/500/200)
 │   └── services/     overlay_service.dart · alert_service.dart · tts_service.dart
 │                     crowdsourced_radar_service.dart · osm_sync_service.dart
 │                     radar_engine.dart · settings_service.dart
@@ -50,8 +53,13 @@ lib/
 └── main.dart         (AppServices = servis lokatoru + bootstrap sırası)
 
 android/app/src/main/kotlin/com/nexradar/app/
-├── MainActivity.kt          kilid ekranı bayraqları + MethodChannel/EventChannel
+├── NexRadarApplication.kt   prosesdə yaşayan FlutterEngine-in sahibi
+├── NexRadarChannels.kt      MethodChannel/EventChannel — aktivitiyə deyil, motora bağlıdır
+├── MainActivity.kt          kilid ekranı bayraqları + paylaşılan motora qoşulma
 ├── RadarOverlayService.kt   ForegroundService + WindowManager overlay
+├── NexRadarAccessibilityService.kt  kilid ekranı HUD-u (TYPE_ACCESSIBILITY_OVERLAY)
+├── BubbleWindow.kt          pəncərə + mövqe/ölçü, iki host üçün ortaq
+├── BubbleHost.kt            hansı host-un çəkdiyini seçir
 ├── SpeedBubbleView.kt       custom-drawn baloncuk, 60 FPS Choreographer
 └── OverlayBus.kt            native ⇄ Dart körpüsü
 ```
@@ -59,21 +67,49 @@ android/app/src/main/kotlin/com/nexradar/app/
 ### Məlumat axını (hər GPS fiksi, ≈1 Hz)
 
 ```
-GPS ─▶ heading ─▶ SQLite keşi (2 km bbox + Haversine)
-                    └─▶ açısal filtr  |θ_heading − θ_camera| ≤ 45°
-                          └─▶ ən yaxın təhlükə
-                               ├─▶ VehicleState  (status / limit / qalan m)
-                               ├─▶ native baloncuk (payload)
-                               ├─▶ TTS pilləkəni   400 m → 150 m
-                               └─▶ bip pilləkəni   500 m → 200 m / hədd aşımı
+GPS ─▶ sürülən iz (RouteCorridor) ─▶ sabit yol istiqaməti (course)
+        └─▶ SQLite keşi (5 km bbox + Haversine)
+             └─▶ açısal filtr   |θ_heading − θ_camera| ≤ 45°
+                  └─▶ yol filtri  radar koridordan ≤ 150 m uzaqda olmalıdır
+                       └─▶ ən yaxın təhlükə
+                            ├─▶ VehicleState  (status / limit / qalan m)
+                            ├─▶ native baloncuk (payload)
+                            ├─▶ TTS pilləkəni   1 km → 500 m → 200 m
+                            └─▶ bip pilləkəni   500 m → 200 m / hədd aşımı
 ```
+
+### Arxa fon: motoru kim saxlayır
+
+Baloncuk ekranda qalıb donursa, səbəb adətən budur: **Dart isolate `FlutterActivity`
+nün yaratdığı mühərrikin içində yaşayır və aktiviti bağlananda mühərriklə birlikdə ölür**.
+Native foreground xidməti sağ qalır, ona görə baloncuk görünməyə davam edir — amma
+GPS axını, anonslar və yaşıl xətt artıq yoxdur.
+
+NexRadar bunu belə həll edir:
+
+* mühərrik **`NexRadarApplication`**-a aiddir və proses boyu yaşayır;
+* `MainActivity` onu `provideFlutterEngine` ilə **borc alır** və
+  `shouldDestroyEngineWithHost()` **`false`** qaytarır (host-un verdiyi mühərrik üçün bu,
+  Flutter embedding-in standart davranışıdır — yoxlanılıb);
+* kanallar (`nexradar/overlay`, `nexradar/overlay_events`, `nexradar/update`)
+  **mühərrikə** bağlanır, aktivitin ömrünə deyil;
+* `RadarOverlayService` yarandığı anda mühərriki istəyir — proses öldükdən sonra Android
+  xidməti `START_STICKY` ilə yenidən qaldıranda Dart tərəfi özü ayağa qalxır;
+* Dart bootstrap-ı `overlayEnabled` yaddaşını görür və **UI olmadan** boru xəttini
+  (`resumeInBackground`) işə salır;
+* `RadarEngine` öz saatına malikdir ([`pumpInterval`], 10 Hz), çünki kada bağlı
+  `Ticker` UI olmayanda heç işləmir — kadranın hədəfi donmasın deyə.
+
+`onTaskRemoved` OEM tapşırıq qatillərinə qarşı foreground xidmətini yenidən təsdiqləyir.
 
 ### 60 FPS "yağ kimi" göstərici
 
 GPS çipi saniyədə bir dəfə veri verir. Ona görə hər iki tərəfdə eyni eksponensial
 filtr tətbiq olunur (`current += (target − current)·(1 − e^(−dt/τ))`, `τ = 0.42 s`):
 
-* **Dart** tərəfdə `SpeedInterpolator` — tətbiq içindəki kadranı `Ticker` (60 FPS) idarə edir.
+* **Dart** tərəfdə `SpeedInterpolator` — kadranı həm `HomeShell`-in `Ticker`-i (60 FPS),
+  həm də mühərrikin öz nasosu (10 Hz) irəli aparır; addım həmişə **real keçən vaxtdan**
+  hesablanır, ona görə filtr iki dəfə sürətlənmir və UI olmadıqda da donmur.
 * **Native** tərəfdə `SpeedBubbleView` — `Choreographer` ilə öz render thread-ində hamarlayır.
 
 Düstur frame-rate-dən asılı deyil (30/60/120 Hz eyni nəticə) və C¹ davamlıdır — yeni
@@ -88,6 +124,21 @@ fiks gələndə "sıçrayış" görünmür.
 3. Əks şerit (180° fərq) və perpendikulyar küçələr (90° fərq) avtomatik düşür.
 
 Tolerans tənzimləmələrdən 15°–90° aralığında dəyişdirilə bilər.
+
+### Yol koridoru — "hansı yoldayam?"
+
+Açısal filtr tək başına kifayət etmir: 3 km qabaqda, 200 m yan tərəfdə olan radar
+cəmi ~4° kənara düşür və konusun içində qalır — halbuki sürücü o yola heç vaxt
+çatmayacaq. `route_corridor.dart` bunu iki yolla düzəldir:
+
+1. **Sabit yol istiqaməti.** İstiqamət GPS-in `heading` sahəsindən deyil, son ~60 m-də
+   **həqiqətən sürülən xəttdən** götürülür. Yavaş sürətdə tərpənmir, döngələri özü izləyir,
+   ona görə filtr yan küçələri "titrəyiş"lə içinə buraxmır.
+2. **Koridor filtri.** Sürülən iz cari istiqamətdə 5 km qabağa uzadılır; radarlar bu xəttə
+   olan məsafəyə görə ölçülür. 150 m-dən uzaq olan düşür.
+
+Ehtiyatlı tərəfdədir: iz hələ qısadırsa (`< 60 m`) koridor **fikir bildirmir** və radar
+saxlanılır. Real radarı itirmək, artıq birini saxlamaqdan qat-qat pisdir.
 
 ---
 
@@ -242,7 +293,7 @@ flutter build apk --release \
 ```bash
 flutter pub get
 flutter analyze          # 0 issue
-flutter test             # 56 test (44 məntiq + 6 layout + 6 golden)
+flutter test             # 75 test (63 məntiq + 6 layout + 6 golden)
 
 # Release APK
 flutter build apk --release --dart-define=NEX_RADAR_REPO=alihajiyev/nexradar
@@ -310,7 +361,8 @@ yoxdursa build Flutter şablonunun debug açarına düşür (`android/app/build.
 
 ## 8. Testlər
 
-`test/widget_test.dart` + `test/update_service_test.dart` — 44 test, hamısı pluginsiz işləyir:
+`test/widget_test.dart` + `test/update_service_test.dart` + `test/route_and_alerts_test.dart` —
+63 test, hamısı pluginsiz işləyir:
 
 
 * Haversine məsafə + bearing (4 kardinal istiqamət)
@@ -325,6 +377,13 @@ yoxdursa build Flutter şablonunun debug açarına düşür (`android/app/build.
   xətası) və versiya arifmetikası (`v1.2.3-beta+build` normalizasiyası,
   `1.10.0 > 1.9.0` — sətir yox, ədəd müqayisəsi). GitHub cavabı `MockClient`,
   quraşdırılmış sürüm `nexradar/update` kanalının mock-u ilə verilir.
+* **`ApproachLadder`**: qapının *keçilməsi* qaydası — ilk dəfə 30 m-də görünən radar
+  üçün heç bir anons yoxdur (köhnə "0 metr" buqı), GPS boşluğu 900 m atlayanda yalnız
+  ən təcili qapı səslənir, uzaqlaşma heç nə demir.
+* **`RouteCorridor`**: sabit yol istiqaməti, "yolumda" filtri, izin qısaldılması və
+  "fikir bildirmirəm" ehtiyatlılığı.
+* **`HeadingCalculator`**: seqmentə perpendikulyar məsafə və `destination()` — koridorun
+  həndəsəsi.
 
 `test/design_test.dart` — 6 **layout təhlükəsizliyi** testi: hər kompozisiya 390×844-də
 render olunur və hər hansı `RenderFlex` daşması testi düşürür. Səthlərdən biri
