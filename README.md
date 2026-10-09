@@ -604,6 +604,39 @@ filtri, orta sürət bölməsi) cihazda işə salına bilmədi; bunlar unit test
 `enabled_accessibility_services` yazmaq da imicdə qüvvədə qalmadı, yəni
 kilid ekranı hostu cihazda təsdiqlənmədi.
 
+### v1.5.0 — kilid ekranı media paneli (real Android 16, API 36)
+
+Media paneli cihazda yoxlanıldı; aşağıdakılar sistemin **öz dömpündən** götürülüb
+(`dumpsys media_session`, `dumpsys notification --noredact`):
+
+```
+Sessions Stack - have 1 sessions:
+  NexRadarLockScreen com.nexradar.app/NexRadarLockScreen/4
+    active=true
+    launchIntent=PendingIntent{... com.nexradar.app startActivity ...}
+    state=PlaybackState {state=PLAYING(3), speed=1.0, actions=560,
+      custom actions=[Action:mName='Radarı dayandır, ...]}
+    metadata: size=4, description=NexRadar aktivdir, Kilid ekranı paneli hazırdır, NexRadar
+```
+
+* `actions=560` = `PLAY_PAUSE | SKIP_TO_PREVIOUS | SKIP_TO_NEXT` — kilid ekranının üç
+  düyməsi (sükut/səs/bildir) sessiyada **var**, dördüncü ("Radarı dayandır") overflow
+  slotundadır.
+* Bildiriş: `category=transport`, `actions=3`, `vis=PUBLIC`,
+  `android.template=String (android.app.Notification$MediaStyle)` və
+  `android.mediaSession=Token (android.media.session.MediaSession$Token@…)` — yəni
+  SystemUI-nin kartı media pleyerinə qaldırması üçün lazım olan iki şey (media template
+  + sessiya tokeni) yerindədir; `android.largeIcon` isə kadran bitmapidir.
+* Sükut rejimi Dart-dan native-ə state payload-u ilə ötürüldü və panel geri saydı:
+  `android.title=🔇 0 km/s`, `android.text=Sükut · 2:29 sonra aktiv · limit məlum deyil`,
+  `android.shortCriticalText=SÜKUT` (Android 16), sessiya isə `PAUSED(2)` oldu — yəni
+  kilid ekranındaki düymə "play"a çevrilir və sürücü sükutu bir toxunuşla aça bilir.
+
+**Yoxlanıla bilməyən:** kilid ekranının *rəsmi görüntüsü* — imicdə kilid ekranı heç
+qurulmamışdır (`isKeyguardShowing=false`), ona görə panelin keyguard-da necə çəkildiyi
+burada təsdiqlənmədi. Yuxarıdaki iki siyahı isə onun bütün **girdilərinin** (MediaSession
++ MediaStyle + token + metadata + short critical text) sistemdə hazır olduğunu göstərir.
+
 ---
 
 ## 10. Yol xəritəsi

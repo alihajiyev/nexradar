@@ -183,10 +183,14 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: NexRadar ${{ steps.version.outputs.tag }}
+          # Deliberately version-agnostic: the notes used to name whatever the
+          # previous release added, which went stale every single time. The
+          # changelog below them is generated from the commits.
           body: |
-            NexRadar ${{ steps.version.outputs.tag }} — kilid ekranı HUD'u, sabit 5 km radar ufqu və tətbiq daxilində yeniləmə.
+            NexRadar ${{ steps.version.outputs.tag }}
 
             Telefonda: **Ayarlar → Yeniləmə → Yoxla** və ya tətbiqi açanda çıxan banner.
+            Kilid ekranında: media paneli (sükut / səs / radar bildir) və canlı sürət kadranı.
           files: NexRadar.apk
           generate_release_notes: true
           fail_on_unmatched_files: true
