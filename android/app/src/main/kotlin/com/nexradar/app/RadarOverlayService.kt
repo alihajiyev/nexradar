@@ -5,14 +5,20 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.graphics.drawable.Icon
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
+import androidx.core.content.ContextCompat
 import kotlin.math.roundToInt
 
 /**
@@ -30,14 +36,19 @@ import kotlin.math.roundToInt
  *    is hidden by the keyguard and there is no flag that changes that, so on the
  *    lock screen the bubble is hosted by [NexRadarAccessibilityService] instead
  *    (see [BubbleWindow] for the layer-by-layer explanation).
- * 3. **A public, live notification** — the three numbers the driver wants (speed,
- *    limit, distance) on the lock screen even before the lock-screen HUD has been
- *    enabled.
+ * 3. **A media panel** — the notification is a `MediaStyle` one backed by a live
+ *    [MediaSession], which is what Android renders *on the lock screen* with
+ *    working controls (see [LockScreenControls]). A plain ongoing notification
+ *    can be filtered out by the keyguard; the media player cannot, and it is the
+ *    one surface the driver can act on without unlocking.
  *
  * All numbers arrive from Dart as a tiny map and are handed to [BubbleWindow],
  * whose view does its own 60 FPS interpolation.
  */
-class RadarOverlayService : Service(), SpeedBubbleView.Listener {
+class RadarOverlayService :
+    Service(),
+    SpeedBubbleView.Listener,
+    LockScreenControls.Actions {
 
     private var window: BubbleWindow? = null
 
@@ -55,6 +66,12 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
     private var lastNotificationText = ""
     private var lastNotificationAt = 0L
 
+    /** The lock-screen media panel: session, metadata and notification style. */
+    private var lockScreen: LockScreenControls? = null
+
+    /** Drives the 1 Hz countdown the panel prints while the silence window runs. */
+    private val countdownHandler = Handler(Looper.getMainLooper())
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -63,9 +80,14 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         showRemaining = BubbleWindow.showRemaining(this)
 
         createNotificationChannel()
+        // The session must exist before the first notification is built: the
+        // MediaStyle carries its token, and that token is what promotes the card
+        // into the lock screen's media player.
+        lockScreen = LockScreenControls(this, this).also { it.start(openAppIntent()) }
         startForegroundCompat(buildNotification())
         instance = this
         isRunning = true
+        watchScreenAndKeyguard()
         DiagLog.event(this, "service", "foreground started")
 
         // Make sure the Dart isolate is up. Normally it already is — the engine
@@ -112,6 +134,9 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
             ACTION_ADD_RADAR -> {
                 OverlayBus.emit("addRadar")
             }
+            ACTION_PAUSE_WARNINGS -> setSilenced(true, fromUser = true)
+            ACTION_RESUME_WARNINGS -> setSilenced(false, fromUser = true)
+            ACTION_TOGGLE_VOICE -> OverlayBus.emit("toggleVoice")
             ACTION_UPDATE -> {
                 intent.extras?.let { bundle ->
                     val payload = mutableMapOf<String, Any?>()
@@ -189,11 +214,122 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
     }
 
     private fun applyPayload(payload: Map<String, Any?>) {
-        val merged = HashMap<String, Any?>(payload)
+        // Dart owns the silence window — it is the layer that beeps — so its
+        // value is adopted here and mirrored into the process-wide bus, where the
+        // accessibility host and the diagnostics screen can read it too.
+        (payload["paused"] as? Boolean)?.let { adoptSilence(it) }
+        (payload["pausedUntilMs"] as? Number)?.let { OverlayBus.silenceUntilMs = it.toLong() }
+
+        val merged = OverlayBus.decorated(payload)
         merged["showRemaining"] = payload["showRemaining"] ?: showRemaining
         window?.pushState(merged)
         lastPayload = merged
         refreshNotification(merged)
+    }
+
+    // ------------------------------------------------------------ silence mode
+
+    /**
+     * Mirrors Dart's silence state without asking Dart again.
+     *
+     * Called on every payload, so it stays dumb: bookkeeping and, at most, the
+     * start of the countdown ticker.
+     */
+    private fun adoptSilence(silenced: Boolean) {
+        val changed = OverlayBus.silenced != silenced
+        OverlayBus.silenced = silenced
+        if (!silenced) OverlayBus.silenceUntilMs = 0L
+        if (changed) scheduleCountdown()
+    }
+
+    /**
+     * Applies a silence request that came from the lock-screen panel.
+     *
+     * The local flag flips immediately — the button must not wait for a round
+     * trip through the Dart isolate — and the request is *also* forwarded to Dart,
+     * which is the layer that actually mutes the announcements. Dart's value comes
+     * back with the next payload and wins if the two ever disagree.
+     */
+    private fun setSilenced(silenced: Boolean, fromUser: Boolean) {
+        OverlayBus.silenced = silenced
+        if (!silenced) OverlayBus.silenceUntilMs = 0L
+        scheduleCountdown()
+
+        if (fromUser) {
+            DiagLog.event(
+                this,
+                "lock",
+                if (silenced) "sükut rejimi — kilid ekranından"
+                else "sükut bitdi — kilid ekranından",
+            )
+            OverlayBus.emit(if (silenced) "pauseWarnings" else "resumeWarnings")
+        }
+
+        val merged = OverlayBus.decorated(lastPayload)
+        lastPayload = merged
+        window?.pushState(merged)
+        refreshNotification(merged, force = true)
+    }
+
+    /** 1 Hz repaint while silenced: the panel prints the time left. */
+    private val countdown = object : Runnable {
+        override fun run() {
+            if (!OverlayBus.silenced) return
+            refreshNotification(lastPayload, force = true)
+            countdownHandler.postDelayed(this, 1000L)
+        }
+    }
+
+    private fun scheduleCountdown() {
+        countdownHandler.removeCallbacks(countdown)
+        if (OverlayBus.silenced) countdownHandler.postDelayed(countdown, 1000L)
+    }
+
+    // ------------------------------------------------- screen & keyguard watch
+
+    /**
+     * Records the screen and keyguard transitions a driver reports as "the app
+     * closed itself".
+     *
+     * The keyguard hides every `TYPE_APPLICATION_OVERLAY` window, and a few OEM
+     * window managers go further and drop the window entirely — the bubble then
+     * never comes back after unlocking, which looks exactly like a crash. So the
+     * unlock is treated as a signal to re-evaluate both hosts, and the file gets
+     * one line per transition: the evidence a support report needs.
+     */
+    private fun watchScreenAndKeyguard() {
+        runCatching {
+            ContextCompat.registerReceiver(
+                this,
+                screenWatcher,
+                IntentFilter().apply {
+                    addAction(Intent.ACTION_SCREEN_OFF)
+                    addAction(Intent.ACTION_SCREEN_ON)
+                    addAction(Intent.ACTION_USER_PRESENT)
+                },
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        }.onFailure { Log.w(TAG, "screen watcher not registered", it) }
+    }
+
+    private val screenWatcher = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF ->
+                    DiagLog.event(this@RadarOverlayService, "screen", "ekran bağlandı")
+
+                Intent.ACTION_SCREEN_ON -> {
+                    DiagLog.event(this@RadarOverlayService, "screen", "ekran açıldı")
+                    BubbleHost.refresh()
+                }
+
+                Intent.ACTION_USER_PRESENT -> {
+                    DiagLog.event(this@RadarOverlayService, "screen", "kilid açıldı")
+                    syncWindow()
+                    BubbleHost.refresh()
+                }
+            }
+        }
     }
 
     // -------------------------------------------------------------- listeners
@@ -213,12 +349,36 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         OverlayBus.emit("doubleTap", mapOf("scale" to scale))
     }
 
+    /**
+     * One tap on the bubble's "+" — and the lock-screen panel's next button.
+     *
+     * Both gestures mean the same thing ("there is a radar here, remember it"),
+     * so they share one implementation instead of two that could drift apart.
+     */
     override fun onReportRequested() {
+        DiagLog.event(this, "overlay", "radar bildir tələbi")
         OverlayBus.emit("addRadar")
     }
 
     override fun onTapped() {
         OverlayBus.emit("tapped")
+    }
+
+    // ------------------------------------------------- lock-screen panel actions
+
+    override fun onPauseRequested() = setSilenced(true, fromUser = true)
+
+    override fun onResumeRequested() = setSilenced(false, fromUser = true)
+
+    override fun onToggleVoiceRequested() {
+        DiagLog.event(this, "lock", "səs — kilid ekranından")
+        OverlayBus.emit("toggleVoice")
+    }
+
+    override fun onStopRequested() {
+        DiagLog.event(this, "lock", "dayandırıldı — kilid ekranından")
+        OverlayBus.requestStop()
+        stopSelf()
     }
 
     // ---------------------------------------------------------- notification
@@ -242,65 +402,112 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         manager.createNotificationChannel(channel)
     }
 
+    /** "Tap the media card" intent: the dashboard, from anywhere. */
+    private fun openAppIntent(): PendingIntent = PendingIntent.getActivity(
+        this,
+        1,
+        Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        },
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
     /**
-     * The lock-screen card. The title carries the live speed, the body carries
-     * the limit, the remaining distance and the camera type — the numbers the
-     * driver asked to see without unlocking the phone.
+     * The lock-screen card.
+     *
+     * It is a **media** notification, and that is the whole trick: the media
+     * player is the one surface Android always renders above the keyguard, and
+     * the only one whose buttons the driver can press without unlocking. The
+     * title carries the live speed, the session's artist line carries the limit
+     * and the distance, and the artwork is the speed dial itself — see
+     * [LockScreenControls].
+     *
+     * The plain notification layout stays as a fallback for the (theoretically
+     * impossible, cheap to handle) case where the session failed to come up: the
+     * numbers and the actions are then exactly what they always were.
      */
     private fun buildNotification(): Notification {
-        val openApp = PendingIntent.getActivity(
-            this,
-            1,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            },
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
+        val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
 
         val addRadar = PendingIntent.getService(
             this,
             2,
             Intent(this, RadarOverlayService::class.java).setAction(ACTION_ADD_RADAR),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            flags,
+        )
+
+        val toggle = PendingIntent.getService(
+            this,
+            3,
+            Intent(this, RadarOverlayService::class.java).setAction(
+                if (OverlayBus.silenced) ACTION_RESUME_WARNINGS else ACTION_PAUSE_WARNINGS,
+            ),
+            flags,
         )
 
         val stop = PendingIntent.getService(
             this,
-            3,
+            4,
             Intent(this, RadarOverlayService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            flags,
         )
 
-        val icon = android.graphics.drawable.Icon.createWithResource(
+        val reportIcon = Icon.createWithResource(this, R.drawable.ic_nexradar_report)
+        val stopIcon = Icon.createWithResource(this, R.drawable.ic_nexradar_stop)
+        val toggleIcon = Icon.createWithResource(
             this,
-            R.drawable.ic_nexradar_notification,
+            if (OverlayBus.silenced) R.drawable.ic_nexradar_play
+            else R.drawable.ic_nexradar_pause,
         )
 
         val summary = summarise(lastPayload)
-        val style = Notification.InboxStyle()
-            .setBigContentTitle(summary.first)
-        for (line in summary.third) {
-            style.addLine(line)
-        }
 
         val builder = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle(summary.first)
-            .setContentText(summary.second)
+            .setContentTitle(summary.title)
+            .setContentText(summary.text)
             .setSubText("NexRadar")
-            .setStyle(style)
             .setSmallIcon(R.drawable.ic_nexradar_notification)
             .setColor(COLOR_ACCENT)
-            .setContentIntent(openApp)
+            .setContentIntent(openAppIntent())
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
-            .setCategory(Notification.CATEGORY_SERVICE)
             // Public = render the text on the lock screen even when the user has
             // "hide sensitive content" enabled for other apps.
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setLocalOnly(true)
-            .addAction(Notification.Action.Builder(icon, "Radar bildir", addRadar).build())
-            .addAction(Notification.Action.Builder(icon, "Dayandır", stop).build())
+            .addAction(Notification.Action.Builder(reportIcon, "Radar bildir", addRadar).build())
+            .addAction(
+                Notification.Action.Builder(
+                    toggleIcon,
+                    if (OverlayBus.silenced) "Sükutu aç" else "Sükut",
+                    toggle,
+                ).build(),
+            )
+            .addAction(Notification.Action.Builder(stopIcon, "Dayandır", stop).build())
+
+        val panel = lockScreen
+        if (panel != null && panel.isActive) {
+            // MediaStyle needs the token of a live session and at least as many
+            // notification actions as `setShowActionsInCompactView` refers to —
+            // all three above are always present.
+            builder
+                .setStyle(panel.styleFor())
+                .setCategory(Notification.CATEGORY_TRANSPORT)
+            panel.artwork?.let { builder.setLargeIcon(it) }
+            // Android 16 prints this one-liner in the status-bar chip and on the
+            // lock screen: the fastest readable form of the current state.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+                builder.setShortCriticalText(summary.snapshot.shortText)
+            }
+        } else {
+            val style = Notification.InboxStyle().setBigContentTitle(summary.title)
+            for (line in summary.lines) {
+                style.addLine(line)
+            }
+            builder.setStyle(style).setCategory(Notification.CATEGORY_SERVICE)
+        }
+
         // Note: `setSilent` is @SystemApi. The channel is IMPORTANCE_LOW with
         // sound and vibration disabled, which is the supported way to keep this
         // card quiet.
@@ -308,10 +515,16 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
     }
 
     /** Throttled refresh so a 1 Hz payload stream cannot flood the notifier. */
-    private fun refreshNotification(payload: Map<String, Any?>) {
+    private fun refreshNotification(
+        payload: Map<String, Any?> = lastPayload,
+        force: Boolean = false,
+    ) {
         val summary = summarise(payload)
-        val signature = summary.first + "|" + summary.second + "|" + summary.third.joinToString()
-        if (signature == lastNotificationText) return
+        val signature =
+            summary.title + "|" + summary.text + "|" + summary.lines.joinToString()
+        // `force` is what the silence countdown needs: it re-renders the *same*
+        // text with a smaller number, so only the rate limit below applies.
+        if (!force && signature == lastNotificationText) return
         val now = SystemClock.elapsedRealtime()
         // A locked screen is refreshed at most twice a second: the distance is
         // the only value that moves that fast, and 500 ms is plenty for it.
@@ -319,15 +532,26 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         lastNotificationAt = now
         lastNotificationText = signature
 
+        // Publish the session metadata first: the notification reuses the artwork
+        // that [LockScreenControls.update] has just (re)drawn.
+        lockScreen?.update(summary.snapshot)
+
         val manager = getSystemService(NotificationManager::class.java) ?: return
         runCatching { manager.notify(NOTIFICATION_ID, buildNotification()) }
     }
 
     /**
-     * Three views of the same state: a one-line title, a one-line summary for the
-     * collapsed card, and the lines the driver sees on the lock screen.
+     * One state → every view of it: the notification title and body, the expanded
+     * lines, and the snapshot the lock-screen media panel prints.
      */
-    private fun summarise(payload: Map<String, Any?>): Triple<String, String, List<String>> {
+    private data class Summary(
+        val title: String,
+        val text: String,
+        val lines: List<String>,
+        val snapshot: LockScreenControls.Snapshot,
+    )
+
+    private fun summarise(payload: Map<String, Any?>): Summary {
         val unit = (payload["unit"] as? String) ?: "km/s"
         val mph = unit == "mph"
         val speed = (payload["speedKmh"] as? Number)?.toFloat()
@@ -338,22 +562,33 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         val type = cameraTypeLabel(payload["cameraType"] as? String)
 
         val shownLimit = if (limit > 0 && mph) (limit / 1.609344f).roundToInt() else limit
-        val speedText = speed?.let {
-            val shown = if (mph) it / 1.609344f else it
-            "${shown.roundToInt()} $unit"
+        val shownSpeed = speed?.let { if (mph) it / 1.609344f else it }
+        val speedText = shownSpeed?.let { "${it.roundToInt()} $unit" }
+
+        // The silence window is process-wide state (it comes from Dart with the
+        // payload), and the panel prints how long is left of it.
+        val silenced = OverlayBus.silenced
+        val remaining = if (silenced && OverlayBus.silenceUntilMs > 0L) {
+            ((OverlayBus.silenceUntilMs - System.currentTimeMillis()) / 1000L)
+                .toInt()
+                .coerceAtLeast(0)
+        } else {
+            0
+        }
+        val silenceText = if (remaining > 0) {
+            "Sükut · ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')} " +
+                "sonra aktiv"
+        } else {
+            "Sükut rejimi aktivdir"
         }
 
-        val title = when (speedText) {
-            null -> "NexRadar aktivdir"
-            else -> {
-                val prefix = when (status) {
-                    SpeedBubbleView.STATUS_WARNING -> "⚠ "
-                    SpeedBubbleView.STATUS_APPROACHING -> "• "
-                    else -> ""
-                }
-                "$prefix$speedText"
-            }
+        val marker = when {
+            silenced -> "🔇 "
+            status == SpeedBubbleView.STATUS_WARNING -> "⚠ "
+            status == SpeedBubbleView.STATUS_APPROACHING -> "• "
+            else -> ""
         }
+        val title = if (speedText == null) "NexRadar aktivdir" else "$marker$speedText"
 
         val distanceText = when {
             distance < 0 -> "5 km-də radar yoxdur"
@@ -363,19 +598,36 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
 
         val limitText = if (shownLimit > 0) "$shownLimit $unit" else "məlum deyil"
 
-        val lines = mutableListOf(
-            "Sürət: ${speedText ?: "—"}",
-            "Limit: $limitText",
-            "Radara məsafə: $distanceText",
-            "Növ: ${if (temporary) "Sürücü bildirişi" else type}",
-        )
-
-        val summary = if (distance < 0) {
-            "Limit $limitText · $distanceText"
-        } else {
-            "Limit $limitText · Radar $distanceText"
+        val text = when {
+            silenced -> "$silenceText · limit $limitText"
+            distance < 0 -> "Limit $limitText · $distanceText"
+            else -> "Limit $limitText · Radar $distanceText"
         }
-        return Triple(title, summary, lines)
+
+        val lines = mutableListOf<String>()
+        if (silenced) lines.add(silenceText)
+        lines.add("Sürət: ${speedText ?: "—"}")
+        lines.add("Limit: $limitText")
+        lines.add("Radara məsafə: $distanceText")
+        lines.add("Növ: ${if (temporary) "Sürücü bildirişi" else type}")
+
+        return Summary(
+            title = title,
+            text = text,
+            lines = lines,
+            snapshot = LockScreenControls.Snapshot(
+                title = title,
+                detail = if (silenced) silenceText else "Limit $limitText · Radar $distanceText",
+                shortText = if (silenced) "SÜKUT" else (speedText ?: ""),
+                unit = unit,
+                speed = shownSpeed?.roundToInt() ?: 0,
+                limit = shownLimit,
+                distanceMeters = distance,
+                status = status,
+                silenced = silenced,
+                silenceRemainingSeconds = remaining,
+            ),
+        )
     }
 
     private fun cameraTypeLabel(wire: String?): String = when (wire) {
@@ -400,6 +652,12 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
 
     override fun onDestroy() {
         detachBubble()
+        countdownHandler.removeCallbacks(countdown)
+        runCatching { unregisterReceiver(screenWatcher) }
+        lockScreen?.stop()
+        lockScreen = null
+        OverlayBus.silenced = false
+        OverlayBus.silenceUntilMs = 0L
         window = null
         isRunning = false
         bubbleAttached = false
@@ -422,6 +680,13 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         const val ACTION_ADD_RADAR = "com.nexradar.app.ADD_RADAR"
         const val ACTION_STOP = "com.nexradar.app.STOP"
 
+        /** Silence mode: mute the beeps and announcements for a bounded window. */
+        const val ACTION_PAUSE_WARNINGS = "com.nexradar.app.PAUSE_WARNINGS"
+        const val ACTION_RESUME_WARNINGS = "com.nexradar.app.RESUME_WARNINGS"
+
+        /** Voice guidance off/on — the panel's "previous" slot. */
+        const val ACTION_TOGGLE_VOICE = "com.nexradar.app.TOGGLE_VOICE"
+
         @Volatile
         var isRunning: Boolean = false
             private set
@@ -433,6 +698,15 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         /** True while this service's own overlay window is drawing. */
         fun isBubbleAttached(): Boolean = instance?.bubbleAttached == true
 
+        /** True while the lock-screen media panel is published. */
+        fun mediaPanelActive(): Boolean = instance?.lockScreen?.isActive == true
+
+        /** Effective silence state: Dart's value, or the panel's last request. */
+        fun silenceActive(): Boolean = OverlayBus.silenced
+
+        /** Epoch millis when the silence window ends, 0 while warnings are live. */
+        fun silenceUntilMs(): Long = OverlayBus.silenceUntilMs
+
         /**
          * Pushes a state payload straight into whichever host is drawing.
          *
@@ -442,7 +716,9 @@ class RadarOverlayService : Service(), SpeedBubbleView.Listener {
         fun update(payload: Map<String, Any?>) {
             OverlayBus.pendingState = payload
             instance?.applyPayload(payload)
-            NexRadarAccessibilityService.instance?.applyPayload(payload)
+            // The accessibility host (the keyguard-surviving bubble) gets the same
+            // state, silence flag included, so the two hosts can never disagree.
+            NexRadarAccessibilityService.instance?.applyPayload(OverlayBus.decorated(payload))
         }
 
         fun setScale(scale: Float) {

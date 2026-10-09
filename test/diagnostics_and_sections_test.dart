@@ -1,7 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:nex_radar/core/constants/app_constants.dart';
 import 'package:nex_radar/core/location/average_speed_tracker.dart';
 import 'package:nex_radar/core/services/diagnostics_service.dart';
+import 'package:nex_radar/core/services/overlay_service.dart';
+import 'package:nex_radar/core/services/settings_service.dart';
+import 'package:nex_radar/core/services/warning_silence.dart';
 import 'package:nex_radar/core/services/drive_report.dart';
 import 'package:nex_radar/core/services/update_service.dart';
 import 'package:nex_radar/core/services/tts_service.dart';
@@ -114,6 +118,11 @@ void main() {
           'lockHudConnected': true,
           'lockHudAttached': true,
           'host': 'accessibility',
+          'mediaPanelActive': true,
+          'keyguardLocked': false,
+          'screenOn': true,
+          'warningsSilenced': false,
+          'silenceUntilMs': 0,
           'overlayGranted': true,
           'lockHudEnabled': true,
           'notificationsEnabled': true,
@@ -173,6 +182,180 @@ void main() {
       expect(state.serviceRunning, isFalse);
       expect(state.lastHeartbeatAt, isNull);
       expect(state.androidSdk, 0);
+      expect(state.mediaPanelActive, isFalse);
+      expect(state.silenceUntilAt, isNull);
+    });
+
+    test('the lock screen is described from what the system reports', () {
+      expect(
+        NativeDiagnostics.fromMap(healthy()).lockScreenLabel,
+        'Kilid açıq · panel hazırdır',
+      );
+
+      final Map<Object?, Object?> locked = healthy();
+      locked['keyguardLocked'] = true;
+      expect(
+        NativeDiagnostics.fromMap(locked).lockScreenLabel,
+        'Kilid bağlı · panel kiliddədir',
+      );
+
+      // No panel while locked is the one combination the driver must be told
+      // about: the keyguard hides every overlay window, so nothing is on screen.
+      final Map<Object?, Object?> blind = healthy();
+      blind['keyguardLocked'] = true;
+      blind['mediaPanelActive'] = false;
+      expect(
+        NativeDiagnostics.fromMap(blind).lockScreenLabel,
+        'Kilid bağlı · panel yoxdur',
+      );
+
+      final Map<Object?, Object?> off = healthy();
+      off['screenOn'] = false;
+      expect(NativeDiagnostics.fromMap(off).lockScreenLabel, 'Ekran bağlıdır');
+    });
+
+    test('the silence window comes back off the wire with its deadline', () {
+      final Map<Object?, Object?> map = healthy();
+      map['warningsSilenced'] = true;
+      map['silenceUntilMs'] = 1759839500000;
+      final NativeDiagnostics state = NativeDiagnostics.fromMap(map);
+      expect(state.nativeSilenced, isTrue);
+      expect(state.silenceUntilAt, isNotNull);
+      expect(
+        state.silenceUntilAt!.millisecondsSinceEpoch,
+        1759839500000,
+      );
+    });
+  });
+
+  // ------------------------------------------------------------ silence window
+
+  group('WarningSilence · bounded by design', () {
+    final DateTime t0 = DateTime(2026, 10, 9, 18, 0, 0);
+
+    test('off means the warnings are live', () {
+      expect(WarningSilence.off.isActive, isFalse);
+      expect(WarningSilence.off.remainingSeconds(t0), 0);
+      expect(WarningSilence.off.isExpired(t0), isFalse);
+      expect(WarningSilence.off.endsAtMillis(t0), 0);
+      expect(WarningSilence.off.normalised(t0), WarningSilence.off);
+      expect(WarningSilence.off.countdownLabel(t0), '0:00');
+    });
+
+    test('counts down and prints the label the panel shows', () {
+      final WarningSilence silence = WarningSilence.startingAt(t0);
+      expect(silence.isActive, isTrue);
+      expect(silence.remainingSeconds(t0), WarningSilence.window.inSeconds);
+      expect(silence.countdownLabel(t0), '5:00');
+      expect(
+        silence.countdownLabel(t0.add(const Duration(seconds: 48))),
+        '4:12',
+      );
+    });
+
+    test('expires exactly at the end of the window, and clamps at zero', () {
+      final WarningSilence silence = WarningSilence.startingAt(t0);
+      final DateTime end = t0.add(WarningSilence.window);
+      expect(
+        silence.isExpired(end.subtract(const Duration(milliseconds: 1))),
+        isFalse,
+      );
+      expect(silence.isExpired(end), isTrue);
+      expect(silence.remainingSeconds(end.add(const Duration(hours: 2))), 0);
+      expect(silence.countdownLabel(end), '0:00');
+      expect(silence.normalised(end), WarningSilence.off);
+    });
+
+    test('a clock that jumps backwards cannot stretch the window', () {
+      final DateTime future = t0.add(const Duration(days: 1));
+      final WarningSilence silence = WarningSilence.startingAt(future);
+      expect(
+        silence.remainingSeconds(t0),
+        WarningSilence.window.inSeconds,
+        reason: 'the remaining time is clamped to the window itself',
+      );
+      expect(silence.isActive, isTrue,
+          reason: 'it is still a pause, just a young one');
+    });
+
+    test('endsAtMillis is the deadline the native panel counts down from', () {
+      expect(
+        WarningSilence.startingAt(t0).endsAtMillis(t0),
+        t0.add(WarningSilence.window).millisecondsSinceEpoch,
+      );
+      expect(WarningSilence.off.endsAtMillis(t0), 0);
+    });
+  });
+
+  group('SettingsService · the silence survives a restart', () {
+    setUp(() => SharedPreferences.setMockInitialValues(<String, Object>{}));
+
+    test('a live window is restored, an expired one is dropped', () async {
+      final SettingsService settings = SettingsService.instance;
+      await settings.load();
+      expect(settings.warningsPaused, isFalse);
+
+      await settings.setWarningSilence(WarningSilence.startingAt(DateTime.now()));
+      expect(settings.warningsPaused, isTrue);
+
+      // Same storage, fresh process: the window is still open.
+      await settings.load();
+      expect(settings.warningsPaused, isTrue,
+          reason: 'a restart must not silently un-mute the radar');
+
+      // A window that ran out while the app was closed is not restored: this is
+      // what stops a forgotten pause from covering a whole trip.
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        AppConstants.prefWarningsPaused: true,
+        AppConstants.prefWarningsPausedAt: DateTime.now()
+            .subtract(WarningSilence.window * 2)
+            .millisecondsSinceEpoch,
+      });
+      await settings.load();
+      expect(settings.warningsPaused, isFalse);
+
+      // And closing the window by hand clears the stored deadline too.
+      await settings.setWarningSilence(WarningSilence.startingAt(DateTime.now()));
+      await settings.setWarningSilence(WarningSilence.off);
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool(AppConstants.prefWarningsPaused), isFalse);
+      expect(prefs.getInt(AppConstants.prefWarningsPausedAt), isNull);
+    });
+  });
+
+  // --------------------------------------------------- lock-screen panel events
+
+  group('OverlayEvent · lock-screen buttons', () {
+    test('the media panel buttons arrive as intents', () {
+      expect(
+        OverlayEvent.fromMap(<Object?, Object?>{'type': 'pauseWarnings'})
+            .isSilenceRequest,
+        isTrue,
+      );
+      expect(
+        OverlayEvent.fromMap(<Object?, Object?>{'type': 'resumeWarnings'})
+            .isResumeRequest,
+        isTrue,
+      );
+      expect(
+        OverlayEvent.fromMap(<Object?, Object?>{'type': 'toggleVoice'})
+            .isVoiceToggle,
+        isTrue,
+      );
+      expect(
+        OverlayEvent.fromMap(<Object?, Object?>{'type': 'addRadar'})
+            .isReportRequest,
+        isTrue,
+      );
+    });
+
+    test('an ordinary bubble tap is not mistaken for a button', () {
+      final OverlayEvent tap =
+          OverlayEvent.fromMap(<Object?, Object?>{'type': 'tapped'});
+      expect(tap.isSilenceRequest, isFalse);
+      expect(tap.isResumeRequest, isFalse);
+      expect(tap.isVoiceToggle, isFalse);
+      expect(tap.isReportRequest, isFalse);
     });
   });
 

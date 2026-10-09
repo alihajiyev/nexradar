@@ -15,6 +15,7 @@ import 'core/services/radar_engine.dart';
 import 'core/services/settings_service.dart';
 import 'core/services/tts_service.dart';
 import 'core/services/update_service.dart';
+import 'core/services/warning_silence.dart';
 import 'ui/theme/app_theme.dart';
 import 'views/home_shell.dart';
 import 'views/onboarding/onboarding_screen.dart';
@@ -156,6 +157,12 @@ class AppServices {
     switch (event.type) {
       case 'addRadar':
         unawaited(_reportFromBubble());
+      case 'pauseWarnings':
+        unawaited(_silenceWarnings());
+      case 'resumeWarnings':
+        unawaited(engine.resumeWarnings(byUser: true));
+      case 'toggleVoice':
+        unawaited(_toggleVoice());
       case 'doubleTap':
         if (event.scale != null) {
           unawaited(settings.setOverlayScale(event.scale!));
@@ -172,6 +179,24 @@ class AppServices {
   Future<void> _reportFromBubble() async {
     final ReportResult result = await engine.reportTemporaryRadar();
     lastNotice.value = result.message;
+  }
+
+  /// The lock-screen pause button: mute the warnings for the bounded window.
+  ///
+  /// Reported back to the driver only when there is a UI to report to — the
+  /// lock screen is usually the only thing on screen at the time, and the media
+  /// card itself shows the countdown, which is the better answer anyway.
+  Future<void> _silenceWarnings() async {
+    await engine.silenceWarnings();
+    lastNotice.value = 'Sükut rejimi: ${WarningSilence.window.inMinutes} dəqiqə';
+  }
+
+  /// The lock-screen previous button: voice guidance off/on without unlocking.
+  Future<void> _toggleVoice() async {
+    await settings.setVoiceEnabled(!settings.voiceEnabled);
+    lastNotice.value = settings.voiceEnabled
+        ? 'Səsli xəbərdarlıq açıldı'
+        : 'Səsli xəbərdarlıq bağlandı';
   }
 
   /// Starts/stops the whole pipeline together with the native bubble.

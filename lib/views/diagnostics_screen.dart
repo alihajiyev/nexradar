@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:nex_radar/main.dart';
 
 import '../core/services/diagnostics_service.dart';
+import '../core/services/warning_silence.dart';
 import '../ui/theme/app_theme.dart';
 import '../ui/widgets/app_header.dart';
 import '../ui/widgets/controls.dart';
@@ -143,6 +144,12 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           _LiveCard(snapshot: snapshot),
           const SizedBox(height: NexSpace.sm),
           _BackgroundCard(snapshot: snapshot),
+          const SizedBox(height: NexSpace.sm),
+          _LockScreenCard(
+            snapshot: snapshot,
+            services: widget.services,
+            onSilenceChanged: () => unawaited(_refreshLive()),
+          ),
           const SizedBox(height: NexSpace.sm),
           if (snapshot.native != null && snapshot.native!.blockers.isNotEmpty)
             _BlockersCard(
@@ -367,6 +374,130 @@ class _LiveCard extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The lock-screen surface: what the driver actually gets while the phone is in
+/// his pocket.
+///
+/// Three things answer that, and they are worth separating because they fail
+/// independently: the **media panel** (the Spotify-style card SystemUI always
+/// renders above the keyguard, with working buttons), the **bubble host** that is
+/// allowed to draw there, and the **silence window** that is currently muting the
+/// warnings.
+class _LockScreenCard extends StatelessWidget {
+  const _LockScreenCard({
+    required this.snapshot,
+    required this.services,
+    required this.onSilenceChanged,
+  });
+
+  final DiagnosticsSnapshot snapshot;
+  final AppServices services;
+  final VoidCallback onSilenceChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final NativeDiagnostics? n = snapshot.native;
+    final bool silenced = services.engine.warningsSilenced;
+    final DateTime now = DateTime.now();
+
+    return NexCard(
+      accent: silenced ? NexColors.amber : null,
+      tintStrength: 0.04,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text('KİLİD EKRANI', style: NexText.overline),
+          const SizedBox(height: NexSpace.sm),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: StatBlock(
+                  value: n == null
+                      ? '—'
+                      : (n.mediaPanelActive ? 'AKTİV' : 'YOX'),
+                  label: 'Media paneli',
+                  accent: (n?.mediaPanelActive ?? false)
+                      ? NexColors.primary
+                      : NexColors.danger,
+                  icon: Icons.lock_clock_rounded,
+                ),
+              ),
+              const _VDivider(),
+              Expanded(
+                child: StatBlock(
+                  value: n == null
+                      ? '—'
+                      : (n.screenOn ? 'AÇIQ' : 'BAĞLI'),
+                  label: 'Ekran',
+                  accent: (n?.screenOn ?? false)
+                      ? NexColors.cyan
+                      : NexColors.textMid,
+                  icon: Icons.visibility_rounded,
+                ),
+              ),
+              const _VDivider(),
+              Expanded(
+                child: StatBlock(
+                  value: n == null
+                      ? '—'
+                      : (n.keyguardLocked ? 'BAĞLI' : 'AÇIQ'),
+                  label: 'Kilid',
+                  accent: (n?.keyguardLocked ?? false)
+                      ? NexColors.amber
+                      : NexColors.primary,
+                  icon: Icons.lock_rounded,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: NexSpace.sm),
+          Row(
+            children: <Widget>[
+              Icon(
+                Icons.play_circle_outline_rounded,
+                size: 15,
+                color: NexColors.textLow,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  n == null
+                      ? 'Native tərəf cavab vermir'
+                      : '${n.lockScreenLabel} · kilid ekranında pauza (sükut) '
+                          'düyməsi media panelinde görünür',
+                  style: NexText.caption,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: NexSpace.sm),
+          NexDivider(),
+          const SizedBox(height: NexSpace.xs),
+          SettingTile(
+            icon: silenced
+                ? Icons.volume_up_rounded
+                : Icons.volume_off_rounded,
+            title: silenced ? 'Sükutu aç' : 'Sükut rejimi',
+            subtitle: silenced
+                ? '${services.settings.silence.countdownLabel(now)} sonra '
+                    'avtomatik açılır — kilid ekranından da idarə olunur'
+                : '${WarningSilence.window.inMinutes} dəqiqəlik sükut — kilid '
+                    'ekranındaki pauza düyməsi ilə də açılır',
+            accent: silenced ? NexColors.amber : NexColors.textLow,
+            onTap: () async {
+              if (services.engine.warningsSilenced) {
+                await services.engine.resumeWarnings(byUser: true);
+              } else {
+                await services.engine.silenceWarnings();
+              }
+              onSilenceChanged();
+            },
           ),
         ],
       ),

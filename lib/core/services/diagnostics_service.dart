@@ -144,6 +144,11 @@ class NativeDiagnostics {
     required this.lockHudConnected,
     required this.lockHudAttached,
     required this.host,
+    required this.mediaPanelActive,
+    required this.keyguardLocked,
+    required this.screenOn,
+    required this.nativeSilenced,
+    required this.silenceUntilAt,
     required this.overlayGranted,
     required this.lockHudEnabled,
     required this.notificationsEnabled,
@@ -173,6 +178,20 @@ class NativeDiagnostics {
   final bool lockHudConnected;
   final bool lockHudAttached;
   final bool lockHudEnabled;
+
+  /// The lock-screen media panel (the Spotify-style card) is published.
+  ///
+  /// This is the surface Android guarantees to render above the keyguard, so it
+  /// — not the bubble — is what the driver sees while the phone is locked.
+  final bool mediaPanelActive;
+
+  final bool keyguardLocked;
+  final bool screenOn;
+
+  /// The native mirror of the silence window, as Dart last pushed it.
+  final bool nativeSilenced;
+  final DateTime? silenceUntilAt;
+
   final bool overlayGranted;
 
   final bool notificationsEnabled;
@@ -259,6 +278,11 @@ class NativeDiagnostics {
       lockHudConnected: map['lockHudConnected'] == true,
       lockHudAttached: map['lockHudAttached'] == true,
       host: (map['host'] as String?) ?? 'none',
+      mediaPanelActive: map['mediaPanelActive'] == true,
+      keyguardLocked: map['keyguardLocked'] == true,
+      screenOn: map['screenOn'] == true,
+      nativeSilenced: map['warningsSilenced'] == true,
+      silenceUntilAt: time(map['silenceUntilMs']),
       overlayGranted: map['overlayGranted'] == true,
       lockHudEnabled: map['lockHudEnabled'] == true,
       notificationsEnabled: map['notificationsEnabled'] == true,
@@ -274,6 +298,15 @@ class NativeDiagnostics {
       shizukuAvailable: map['shizukuAvailable'] == true,
       shizukuGranted: map['shizukuGranted'] == true,
     );
+  }
+
+  /// One line about the lock screen, for the diagnostics card.
+  String get lockScreenLabel {
+    if (!screenOn) return 'Ekran bağlıdır';
+    if (keyguardLocked) {
+      return mediaPanelActive ? 'Kilid bağlı · panel kiliddədir' : 'Kilid bağlı · panel yoxdur';
+    }
+    return mediaPanelActive ? 'Kilid açıq · panel hazırdır' : 'Kilid açıq · panel yoxdur';
   }
 
   /// The host name as the driver should read it.

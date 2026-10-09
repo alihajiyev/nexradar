@@ -197,13 +197,29 @@ class OverlayEvent {
     this.scale,
   });
 
-  /// `addRadar` | `moved` | `doubleTap` | `tapped` | `dismissed`
+  /// One of:
+  ///
+  /// * `addRadar` — the bubble's "+" hotspot, or the media panel's next button
+  /// * `pauseWarnings` / `resumeWarnings` — the lock-screen play/pause button
+  /// * `toggleVoice` — the media panel's previous button (voice off/on)
+  /// * `moved`, `doubleTap`, `tapped`, `dismissed`, `lockHud`
   final String type;
   final double? x;
   final double? y;
   final double? scale;
 
   bool get isReportRequest => type == 'addRadar';
+
+  /// The lock-screen panel's play/pause button.
+  ///
+  /// A *request*, not a command: Dart owns the silence window (it is the layer
+  /// that beeps), applies it and pushes the effective value back to the panel.
+  bool get isSilenceRequest => type == 'pauseWarnings';
+
+  bool get isResumeRequest => type == 'resumeWarnings';
+
+  /// The media panel's previous button: voice guidance off/on in one tap.
+  bool get isVoiceToggle => type == 'toggleVoice';
 
   static OverlayEvent fromMap(Map<Object?, Object?> map) => OverlayEvent(
         type: (map['type'] as String?) ?? 'unknown',

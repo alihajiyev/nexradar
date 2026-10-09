@@ -22,6 +22,7 @@ import 'osm_sync_service.dart';
 import 'overlay_service.dart';
 import 'settings_service.dart';
 import 'tts_service.dart';
+import 'warning_silence.dart';
 
 /// The brain of NexRadar.
 ///
@@ -177,6 +178,68 @@ class RadarEngine {
   int get cameraCacheSize => _cache.length;
   double get heading => _heading;
 
+  // -------------------------------------------------------------- silence mode
+
+  /// True while the driver has muted the warnings on purpose.
+  ///
+  /// The state lives in [SettingsService.silence] so the alert ladder, the
+  /// lock-screen media card, the floating bubble and the diagnostics screen can
+  /// never disagree about it; this is a convenience read.
+  bool get warningsSilenced => settings.silence.isActive;
+
+  Timer? _silenceTimer;
+
+  /// Mutes the beeps and the announcements for [WarningSilence.window].
+  ///
+  /// Bound in time on purpose (see [WarningSilence]): the ladder comes back on
+  /// its own, and every surface that renders the state prints how long is left.
+  /// This is what the lock-screen panel's play/pause button asks for, and what
+  /// the diagnostics screen's switch toggles.
+  Future<void> silenceWarnings({DateTime? at}) async {
+    final DateTime now = at ?? DateTime.now();
+    await settings.setWarningSilence(WarningSilence.startingAt(now));
+    _armSilenceTimer(now);
+    _appendLog('Sükut rejimi: ${WarningSilence.window.inMinutes} dəqiqə');
+    Diag.event('silence', 'started · until ${settings.silence.endsAt()}');
+    await _maybePushToOverlay(force: true);
+  }
+
+  /// Lifts the silence.
+  ///
+  /// [byUser] separates "the driver asked" from "the window ran out" — the
+  /// difference the flight recorder has to show, because the second one is the
+  /// proof that the safety net worked.
+  Future<void> resumeWarnings({bool byUser = false}) async {
+    if (!settings.silence.isActive && !byUser) return;
+    _silenceTimer?.cancel();
+    _silenceTimer = null;
+    await settings.setWarningSilence(WarningSilence.off);
+    _appendLog(
+      byUser ? 'Sükut açıldı — xəbərdarlıqlar aktivdir'
+          : 'Sükut bitdi — xəbərdarlıqlar avtomatik açıldı',
+    );
+    Diag.event('silence', byUser ? 'resumed by user' : 'window expired');
+    await _maybePushToOverlay(force: true);
+  }
+
+  /// Re-arms the countdown for the *current* window.
+  ///
+  /// Deriving the delay from the stored timestamp instead of trusting the timer
+  /// is what makes a restart safe: the previous process may have died a second
+  /// after the driver pressed pause, and the radar still has to come back on
+  /// schedule.
+  void _armSilenceTimer([DateTime? now]) {
+    _silenceTimer?.cancel();
+    _silenceTimer = null;
+    if (!settings.silence.isActive) return;
+    final DateTime at = now ?? DateTime.now();
+    final Duration left =
+        Duration(seconds: settings.silence.remainingSeconds(at));
+    _silenceTimer = Timer(left + const Duration(seconds: 1), () {
+      unawaited(resumeWarnings());
+    });
+  }
+
   // ---------------------------------------------------------------- lifecycle
 
   Future<void> start({bool background = true}) async {
@@ -190,6 +253,14 @@ class RadarEngine {
     _passedRadarKeys.clear();
     _appendLog('Mühərrik işə salındı');
     Diag.event('engine', 'started (background: $background)');
+
+    // A silence window survives a restart only while it is still open, and the
+    // countdown is rebuilt from the stored timestamp rather than from a timer
+    // that died with the previous process.
+    if (settings.silence.isActive) {
+      await settings.setWarningSilence(settings.silence.normalised(DateTime.now()));
+    }
+    _armSilenceTimer();
 
     _positionSub = locationService.positions(background: background).listen(
       _onPosition,
@@ -224,6 +295,8 @@ class RadarEngine {
     _communityTimer = null;
     _pump?.cancel();
     _pump = null;
+    _silenceTimer?.cancel();
+    _silenceTimer = null;
     corridor.reset();
     averageSpeed.leave();
     _averageReading = null;
@@ -486,7 +559,9 @@ class RadarEngine {
     }
 
     // --- voice ladder --------------------------------------------------------
-    if (crossed != null && settings.voiceEnabled) {
+    // The silence window outranks the ladder: a muted radar stays silent even
+    // while the driver is speeding past a camera.
+    if (crossed != null && settings.voiceEnabled && !settings.silence.isActive) {
       _appendLog('${camera.type.wire} radar ${distance.round()} m '
           '— hədd ${camera.maxSpeed}');
       final String text = camera.isTemporary
@@ -526,7 +601,7 @@ class RadarEngine {
     }
 
     // --- audible/kinetic ladder ---------------------------------------------
-    if (settings.beepEnabled && closing) {
+    if (settings.beepEnabled && closing && !settings.silence.isActive) {
       if (s.isSpeeding && distance <= AppConstants.gateMidMeters) {
         unawaited(alerts.alarm());
         if (settings.voiceEnabled && s.speedKmh > camera.maxSpeed + 12) {
@@ -558,7 +633,7 @@ class RadarEngine {
 
     final AverageSpeedReading? reading = _averageReading;
     if (reading == null || !reading.isOver) return;
-    if (!settings.voiceEnabled) return;
+    if (!settings.voiceEnabled || settings.silence.isActive) return;
 
     final DateTime now = DateTime.now();
     if (now.difference(_lastSectionWarnAt) <
@@ -628,13 +703,18 @@ class RadarEngine {
       ...s.toOverlayPayload(),
       'unit': settings.speedUnit,
       'showRemaining': settings.showRemaining,
+      // The silence window: the lock-screen media card prints its countdown and
+      // the bubble turns its chip into "SÜKUT" while it is open.
+      'paused': settings.silence.isActive,
+      'pausedUntilMs': settings.silence.endsAtMillis(DateTime.now()),
     };
 
     // Only spend a platform-channel round trip when something moved.
     final String signature = '${payload['status']}|'
         '${(payload['speedKmh'] as double? ?? 0).toStringAsFixed(1)}|'
         '${payload['distanceMeters']}|${payload['limit']}|'
-        '${payload['hasFix']}|${payload['isSpeeding']}';
+        '${payload['hasFix']}|${payload['isSpeeding']}|'
+        '${settings.silence.isActive}';
     final DateTime now = DateTime.now();
     if (!force &&
         signature == _lastPushedSignature &&

@@ -30,6 +30,38 @@ object OverlayBus {
     @Volatile
     var overlayDesired: Boolean = false
 
+    /**
+     * Silence mode — the driver muted the warnings on purpose, for a bounded
+     * window ("Sükut rejimi").
+     *
+     * Process-wide because three different actors need the same answer: both
+     * bubble hosts render it, the lock-screen media panel prints its countdown,
+     * and the diagnostics screen reports it. The *decision* stays in Dart — it is
+     * the layer that beeps — and arrives with the payload; a tap on the
+     * lock-screen button updates this copy immediately and asks Dart to agree.
+     */
+    @Volatile
+    var silenced: Boolean = false
+
+    /** Epoch millis when the silence window ends, 0 while warnings are live. */
+    @Volatile
+    var silenceUntilMs: Long = 0L
+
+    /**
+     * Adds the silence state to a payload, so a window that renders it never has
+     * to know where the value came from.
+     *
+     * Returns a mutable copy on purpose: the callers add their own keys to it
+     * (the service appends the display preferences) and pushing a fresh map keeps
+     * the payload Dart sent untouched.
+     */
+    fun decorated(payload: Map<String, Any?>): HashMap<String, Any?> {
+        val merged = HashMap<String, Any?>(payload)
+        merged["paused"] = silenced
+        merged["pausedUntilMs"] = if (silenced) silenceUntilMs else 0L
+        return merged
+    }
+
     fun emit(payload: Map<String, Any?>) {
         mainHandler.post {
             try {

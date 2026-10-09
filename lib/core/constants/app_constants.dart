@@ -8,7 +8,7 @@ class AppConstants {
   // ---------------------------------------------------------------- identity
   static const String appName = 'NexRadar';
   static const String appTagline = 'Arxa fonda işləyən radar & sürət HUD';
-  static const String appVersion = '1.4.0';
+  static const String appVersion = '1.5.0';
 
   // -------------------------------------------------------------- persistence
   static const String dbName = 'nex_radar.db';
@@ -119,6 +119,8 @@ class AppConstants {
   // ------------------------------------------------------------ preference keys
   static const String prefOverlayEnabled = 'overlay_enabled';
   static const String prefVoiceEnabled = 'voice_enabled';
+  static const String prefWarningsPaused = 'warnings_paused';
+  static const String prefWarningsPausedAt = 'warnings_paused_at';
   static const String prefBeepEnabled = 'beep_enabled';
   static const String prefLanguage = 'voice_language';
   static const String prefAngularTolerance = 'angular_tolerance';

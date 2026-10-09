@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/database/db_helper.dart';
 import '../../core/services/osm_sync_service.dart';
+import '../../core/services/warning_silence.dart';
 import '../../main.dart';
 import '../../ui/theme/app_theme.dart';
 import '../../ui/theme/status_palette.dart';
@@ -238,6 +241,28 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                     subtitle: '500 m-də yumşaq, 200 m-də həyəcan siqnalı',
                     value: s.beepEnabled,
                     onChanged: s.setBeepEnabled,
+                  ),
+                  // A window, not a switch: the warnings come back on their own, so
+                  // mute-forgotten-forever can never happen. The lock screen's
+                  // play/pause button drives the same state.
+                  SettingTile(
+                    icon: s.warningsPaused
+                        ? Icons.volume_up_rounded
+                        : Icons.volume_off_rounded,
+                    title: s.warningsPaused ? 'Sükutu aç' : 'Sükut rejimi',
+                    subtitle: s.warningsPaused
+                        ? '${WarningSilence.window.inMinutes} dəqiqəlik sükut — '
+                            'tezliklə avtomatik açılır'
+                        : '${WarningSilence.window.inMinutes} dəqiqəlik sükut '
+                            '(kilid ekranındaki pauza düyməsi ilə də)',
+                    accent: s.warningsPaused ? NexColors.primary : NexColors.textLow,
+                    onTap: () {
+                      if (services.engine.warningsSilenced) {
+                        unawaited(services.engine.resumeWarnings(byUser: true));
+                      } else {
+                        unawaited(services.engine.silenceWarnings());
+                      }
+                    },
                   ),
                   SettingTile(
                     icon: Icons.play_circle_outline_rounded,

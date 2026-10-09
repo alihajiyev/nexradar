@@ -1,0 +1,30 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- A radar blip with a plus: "report a radar here" (the bubble's own "+"
+         hotspot, moved to the notification and the lock-screen media panel). -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M10,9m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.7"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:pathData="M5.4,4.6A7.4,7.4 0,0 0,3.2 9.8" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.7"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:pathData="M14.6,4.6A7.4,7.4 0,0 1,16.8 9.8" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.9"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:pathData="M18.5,15.5h4M20.5,13.5v4" />
+</vector>

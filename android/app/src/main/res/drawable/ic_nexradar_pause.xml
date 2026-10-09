@@ -1,0 +1,15 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- Two bars: the "sükût" (silence) side of the lock-screen play/pause
+         button. White-tinted so it renders as a status-bar/action icon. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M8,5h3v14h-3z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M13,5h3v14h-3z" />
+</vector>

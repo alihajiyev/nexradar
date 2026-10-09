@@ -115,6 +115,16 @@ object NexRadarDiagnostics {
             else -> "none"
         },
 
+        // --- the lock-screen surface ------------------------------------------
+        // The media panel is the only thing Android guarantees to render above
+        // the keyguard, so "is it published" is the honest answer to "will the
+        // driver see anything while the phone is locked".
+        "mediaPanelActive" to RadarOverlayService.mediaPanelActive(),
+        "warningsSilenced" to RadarOverlayService.silenceActive(),
+        "silenceUntilMs" to RadarOverlayService.silenceUntilMs(),
+        "keyguardLocked" to keyguardLocked(context),
+        "screenOn" to screenOn(context),
+
         // --- grants that silently disable the background ----------------------
         "overlayGranted" to Settings.canDrawOverlays(context),
         "lockHudEnabled" to lockHudEnabled(context),
@@ -146,6 +156,19 @@ object NexRadarDiagnostics {
     private fun granted(context: Context, permission: String): Boolean =
         ContextCompat.checkSelfPermission(context, permission) ==
             PackageManager.PERMISSION_GRANTED
+
+    /** True while the keyguard is up — the state an overlay window cannot survive. */
+    private fun keyguardLocked(context: Context): Boolean {
+        val manager =
+            context.getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+        return manager?.isKeyguardLocked == true
+    }
+
+    /** True while the screen is on. The lock-screen HUD only matters then. */
+    private fun screenOn(context: Context): Boolean {
+        val power = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        return power?.isInteractive == true
+    }
 
     /**
      * True when the driver has switched NexRadar on under Settings →

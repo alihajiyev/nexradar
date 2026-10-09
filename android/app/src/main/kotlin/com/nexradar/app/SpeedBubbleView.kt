@@ -74,6 +74,13 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
     private var unitLabel = "km/s"
     private var hasFix = true
 
+    /**
+     * True while the silence window runs: the dial keeps measuring, but it says
+     * so — a muted radar that still looks live would be a lie the driver cannot
+     * see through.
+     */
+    private var paused = false
+
     /** 1.0 = default size; 0.78 = compact; 1.3 = expanded. */
     var scaleFactor = 1f
         set(value) {
@@ -190,6 +197,7 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
         showRemaining = payload["showRemaining"] as? Boolean ?: showRemaining
         unitLabel = (payload["unit"] as? String) ?: unitLabel
         hasFix = payload["hasFix"] as? Boolean ?: hasFix
+        paused = payload["paused"] as? Boolean ?: paused
 
         val fresh = displaySpeed == 0f && targetSpeed > 0f
         if (fresh) displaySpeed = targetSpeed
@@ -286,12 +294,13 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
         val cy = centerY(s)
         val r = radius(s)
 
-        val accent = when (status) {
-            STATUS_WARNING -> Color.parseColor("#FF4D5E")
-            STATUS_APPROACHING -> Color.parseColor("#FFB531")
+        val accent = when {
+            paused -> Color.parseColor("#7C8B93")
+            status == STATUS_WARNING -> Color.parseColor("#FF4D5E")
+            status == STATUS_APPROACHING -> Color.parseColor("#FFB531")
             else -> Color.parseColor("#31F0A6")
         }
-        val idle = status == STATUS_IDLE
+        val idle = status == STATUS_IDLE && !paused
         val warn = status == STATUS_WARNING
         val flash = if (warn) 0.35f + 0.65f * abs(sin(blinkPhase * Math.PI.toFloat())) else 1f
 
@@ -499,8 +508,9 @@ class SpeedBubbleView(context: Context) : View(context), Choreographer.FrameCall
         canvas.restore()
     }
 
-    /** "3.2 km" / "320 m" / the unit when the horizon is empty. */
+    /** "3.2 km" / "320 m" / "SÜKUT" / the unit when the horizon is empty. */
     private fun distanceText(): String {
+        if (paused) return "SÜKUT"
         if (distance < 0) return if (unitLabel == "mph") "MPH" else "KM/S"
         if (!showRemaining && limit > 0) return if (unitLabel == "mph") "MPH" else "KM/S"
         return if (distance >= 1000) {

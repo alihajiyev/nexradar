@@ -311,6 +311,63 @@ tələb etmir.
 
 ---
 
+### Kilid ekranı paneli: media sessiyası (Spotify modeli)
+
+Erişilebilirlik host-u baloncuğu kilid ekranına qoyur, amma **düymə yoxdur** və bəzi
+ROM-larda kilid ekranı bildirişləri tamamilə gizlədilir. Telefonun həmişə göstərdiyi və
+həmişə idarə etməyə icazə verdiyi səth **media pleyeridir** — Spotify-ın oturduğu yer.
+NexRadar da orada oturur (`LockScreenControls`):
+
+* `android.media.session.MediaSession` açılır (`setActive(true)`) və `MediaMetadata` +
+  `PlaybackState` ilə canlı saxlanır;
+* bildiriş `Notification.MediaStyle`-dır və sessiyanın tokenini daşıyır — SystemUI bu
+  ikisini `EXTRA_MEDIA_SESSION` ilə birləşdirir və kartı kilid ekranına qaldırır;
+* **artwork canlı sürət kadranıdır**: 256×256 bitmap yalnız görünən rəqəm dəyişəndə
+  yenidən çəkilir (saniyədə ən çoxu bir dəfə), yəni kilid ekranında baloncuğun eynisini
+  görürsən — sürət, limit nişanı və məsafə çipi ilə.
+
+Düymələri SystemUI sessiyadan götürür (1-ci slot `PlaybackState`-dən, 2/3-cü slot
+`ACTION_SKIP_TO_*`-dən):
+
+| Slot | Düymə | Nə edir |
+| --- | --- | --- |
+| 1 | play / pauza | **Sükut rejimi** — bip və anonslar 5 dəqiqə susur |
+| 2 | əvvəlki | **Səs** — səsli xəbərdarlığı aç/bağla |
+| 3 | növbəti | **Radar bildir** — olduğun yerdə radar bildir |
+| overflow | stop | **Dayandır** — baloncuğu və boru xəttini söndür |
+
+Artıq bonus: media sessiyası qulaqlıq və avtomobilin media düymələrini də qəbul edir.
+
+> **Sükut müddətlidir** (`WarningSilence`, 5 dəqiqə). Radar tətbiqini əbədi susdurmaq
+> mümkün olsa, sürücü bir gün onu səssiz qoyub unudar və qalan yolu radarsız keçər.
+> Müddət bitəndə xəbərdarlıqlar **özü** qayıdır, kilid ekranı kartı isə geri sayğacı
+> göstərir (`Sükut · 4:12 sonra aktiv`), sükutda baloncuğun çipi `SÜKUT` olur və rəngi
+> bozlaşır.
+
+> **Sükutun sahibi Dart-dır.** Bip və anonslar Dart mühərrikindən çıxır, ona görə kilid
+> ekranındaki düymə bir *istək* göndərir (`pauseWarnings` / `resumeWarnings` olayı),
+> qərarı mühərrik verir və effektiv dəyəri növbəti state payload-u ilə geri göndərir.
+> Düymənin öz ikonası isə dərhal dəyişir — sürücü Dart isolate-ni gözləmir.
+
+> **Yeni icazə tələb olunmadı.** `mediaPlayback` foreground servis tipi və
+> `FOREGROUND_SERVICE_MEDIA_PLAYBACK` **istifadə edilmir**: media kartı `MediaStyle` +
+> sessiya tokenindən yaranır, servis tipindən deyil. Xidmət `specialUse` olaraq qalır və
+> Play Console izahı dəyişmir. Android 16 (API 36) cihazlarda isə bildiriş
+> `setShortCriticalText(...)` ilə status sətrində və kilid ekranında bir sətirlik sürəti
+> də göstərir.
+
+### "Kilid ekranında bağlanır" — artıq ölçülən bir sual
+
+Servis `ACTION_SCREEN_OFF` / `SCREEN_ON` / `USER_PRESENT` yayımlarını dinləyir, hər keçidi
+uçuş qeydinə yazır (`screen` sətri: `ekran bağlandı`, `kilid açıldı`) və kilid açılanda
+hər iki host-u yenidən qiymətləndirir — bəzi OEM pəncərə menecerləri ekran bağlananda
+overlay pəncərəsini tamamilə atır və baloncuk bir daha qayıtmır. Diaqnostika ekranındaki
+**KİLİD EKRANI** kartı üç sualı cavablandırır: media paneli aktivdir? ekran açıqdır? kilid
+bağlıdır? Yəni "kilid ekranında heç nə görmürəm" artıq təxmin deyil, üç baxıla bilən
+dəyərdir.
+
+---
+
 ## 5. İcazələr
 
 | İcazə | Nə üçün |
@@ -406,7 +463,7 @@ həmin versiya üçün GitHub Release yoxdursa APK-nı derləyib `v<sürüm>` te
 
 ```bash
 # Yeganə addım: versiyanı qaldır və push et
-#   pubspec.yaml: version: 1.4.0+5
+#   pubspec.yaml: version: 1.5.0+6
 git commit -am "chore: bump version"
 git push
 ```
@@ -440,7 +497,7 @@ yoxdursa build Flutter şablonunun debug açarına düşür (`android/app/build.
 ## 8. Testlər
 
 `test/widget_test.dart` + `test/update_service_test.dart` + `test/route_and_alerts_test.dart` +
-`test/diagnostics_and_sections_test.dart` — **112 test**, hamısı pluginsiz işləyir:
+`test/diagnostics_and_sections_test.dart` — **122 test**, hamısı pluginsiz işləyir:
 
 
 * Haversine məsafə + bearing (4 kardinal istiqamət)
@@ -450,6 +507,18 @@ yoxdursa build Flutter şablonunun debug açarına düşür (`android/app/build.
 * `VehicleState` pilləkəni: idle → approaching → warning, hədd aşımı toleransı, ETA
 * OSM tag parser: `mph` çevrilməsi, `AZ:urban`, compass, zibil dəyərlərin rəddi
 * `SpeedCamera` `toMap → fromMap` gediş-dönüş + `identityKey` dedup
+* **`WarningSilence`**: geri sayım (`5:00` → `4:12`), pəncərənin dəqiq bitdiyi an,
+  sıfıra sıxılma, saat geri qaçanda pəncərənin uzanmaması və `endsAtMillis` — kilid
+  ekranı panelinin saydığı son tarix.
+* **Sükutun yenidən başlatmaya davamı** (`SettingsService` + `SharedPreferences` mock):
+  açıq pəncərə bərpa olunur, vaxtı keçmiş pəncərə **atılır** (yəni unudulmuş sükut bütün
+  səfəri örtə bilməz), əl ilə bağlananda saxlanan son tarix də silinir.
+* **Kilid ekranı düymələri** (`OverlayEvent`): `pauseWarnings` / `resumeWarnings` /
+  `toggleVoice` / `addRadar` intent kimi tanınır, adi baloncuk toxunuşu isə onlarla
+  qarışdırılmır.
+* **`NativeDiagnostics` kilid ekranı**: media paneli, ekran/kilid vəziyyəti və sükut
+  pəncərəsi xam xəritədən düzgün oxunur (kilid bağlı + panel yox = sürücünün görmədiyi
+  yeganə hal).
 * `PhraseBook`: AZ/TR/EN cümlələr və yuvarlaqlaşdırma (137 m → "140")
 * **`UpdateService`**: release aşkarlanması (APK aktivinin seçilməsi, 404, şəbəkə
   xətası) və versiya arifmetikası (`v1.2.3-beta+build` normalizasiyası,
@@ -546,4 +615,6 @@ kilid ekranı hostu cihazda təsdiqlənmədi.
 
 Bitmiş addımlar: kilid ekranı HUD (erişilebilirlik host-u + publik bildiriş kartı),
 sabit 5 km radar ufqu, tətbiq daxilində yeniləmə və GitHub Releases boru xətti,
+kilid ekranı media paneli (pauza/səs/bildir düymələri, canlı kadran artwork-ü) və
+müddətli sükut rejimi,
 `Inter`/`InterDisplay` dizayn sistemi.

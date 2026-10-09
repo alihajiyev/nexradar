@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants/app_constants.dart';
+import 'warning_silence.dart';
 
 /// All user-facing preferences, persisted through SharedPreferences and exposed
 /// as [ValueNotifier]s so the UI and the engine stay in sync live.
@@ -19,6 +20,9 @@ class SettingsService extends ChangeNotifier {
   bool _overlayEnabled = false;
   bool _voiceEnabled = true;
   bool _beepEnabled = true;
+
+  /// The bounded silence window ("Sükut rejimi"). See [WarningSilence].
+  WarningSilence _silence = WarningSilence.off;
   String _language = 'az-AZ';
   double _angularTolerance = AppConstants.angularToleranceDegrees;
   bool _useMph = false;
@@ -36,6 +40,11 @@ class SettingsService extends ChangeNotifier {
   bool get overlayEnabled => _overlayEnabled;
   bool get voiceEnabled => _voiceEnabled;
   bool get beepEnabled => _beepEnabled;
+
+  /// The silence window, shared by the engine, the lock-screen media panel, the
+  /// floating bubble and the diagnostics screen.
+  WarningSilence get silence => _silence;
+  bool get warningsPaused => _silence.isActive;
   bool get showRemaining => _showRemaining;
   bool get useMph => _useMph;
   String get language => _language;
@@ -74,6 +83,16 @@ class SettingsService extends ChangeNotifier {
     _overlayEnabled = p.getBool(AppConstants.prefOverlayEnabled) ?? false;
     _voiceEnabled = p.getBool(AppConstants.prefVoiceEnabled) ?? true;
     _beepEnabled = p.getBool(AppConstants.prefBeepEnabled) ?? true;
+    // The silence window is restored only while it is still open: a driver who
+    // muted the warnings, then killed the app or rebooted the phone, gets them
+    // back rather than driving the next trip in silence he has forgotten about.
+    final bool paused = p.getBool(AppConstants.prefWarningsPaused) ?? false;
+    final int? pausedAt = p.getInt(AppConstants.prefWarningsPausedAt);
+    _silence = paused && pausedAt != null
+        ? WarningSilence.startingAt(
+            DateTime.fromMillisecondsSinceEpoch(pausedAt),
+          ).normalised(DateTime.now())
+        : WarningSilence.off;
     _language = p.getString(AppConstants.prefLanguage) ?? 'az-AZ';
     _angularTolerance = p.getDouble(AppConstants.prefAngularTolerance) ??
         AppConstants.angularToleranceDegrees;
@@ -118,6 +137,27 @@ class SettingsService extends ChangeNotifier {
   Future<void> setBeepEnabled(bool v) async {
     _beepEnabled = v;
     await _write(() => _prefs!.setBool(AppConstants.prefBeepEnabled, v));
+  }
+
+  /// Opens or closes the silence window.
+  ///
+  /// Persisted on purpose: the panels that render it (the lock-screen media
+  /// card, the bubble) must survive a process death showing what the driver last
+  /// asked for, and [WarningSilence.normalised] is what stops a stale window from
+  /// outliving its own five minutes.
+  Future<void> setWarningSilence(WarningSilence value) async {
+    _silence = value;
+    final SharedPreferences? p = _prefs;
+    if (p != null) {
+      await p.setBool(AppConstants.prefWarningsPaused, value.isActive);
+      final DateTime? at = value.pausedAt;
+      if (at == null) {
+        await p.remove(AppConstants.prefWarningsPausedAt);
+      } else {
+        await p.setInt(AppConstants.prefWarningsPausedAt, at.millisecondsSinceEpoch);
+      }
+    }
+    notifyListeners();
   }
 
   Future<void> setLanguage(String v) async {
