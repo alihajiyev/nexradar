@@ -2,7 +2,7 @@ name: nex_radar
 description: "NexRadar - Background-first floating radar & speedometer HUD (Azerbaijan & Global Edition)."
 publish_to: 'none'
 
-version: 1.5.0+6
+version: 1.5.1+7
 
 environment:
   sdk: ^3.13.4

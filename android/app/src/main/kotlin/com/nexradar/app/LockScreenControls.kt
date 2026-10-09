@@ -176,7 +176,10 @@ class LockScreenControls(
         created.setCallback(callback)
         val empty = Snapshot(
             title = "NexRadar aktivdir",
-            detail = "Kilid ekranı paneli hazırdır",
+            // Until the first payload arrives there is no speed and no radar to
+            // report, and the only truthful thing left to say is the one a driver
+            // can act on: the phone has no fix yet.
+            detail = "GPS gözlənilir",
             shortText = "",
             unit = "km/s",
             speed = 0,

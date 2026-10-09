@@ -127,8 +127,7 @@ class RadarOverlayService :
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                OverlayBus.requestStop()
-                stopSelf()
+                stopEverything()
                 return START_NOT_STICKY
             }
             ACTION_ADD_RADAR -> {
@@ -377,7 +376,25 @@ class RadarOverlayService :
 
     override fun onStopRequested() {
         DiagLog.event(this, "lock", "dayandırıldı — kilid ekranından")
+        stopEverything()
+    }
+
+    /**
+     * The one way this service is ever torn down.
+     *
+     * Every entry point — the notification's stop button, the lock-screen media
+     * panel's stop button, and the app's own hide call — has to leave the *same*
+     * record behind: the driver asked for this. That record is the persisted
+     * "desired" flag, and it is what stops a later service restart (a reboot, an
+     * update, a sticky restart after process death) from resurrecting a bubble he
+     * deliberately killed — and, in the other direction, what lets the app tell
+     * "he still wants the radar" apart from "he turned it off".
+     */
+    private fun stopEverything() {
+        OverlayBus.overlayDesired = false
+        BubbleWindow.setDesired(this, false)
         OverlayBus.requestStop()
+        BubbleHost.refresh()
         stopSelf()
     }
 

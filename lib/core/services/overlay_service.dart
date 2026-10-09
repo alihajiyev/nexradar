@@ -171,6 +171,24 @@ class OverlayService {
     }
   }
 
+  /// What the **native** side still believes about the driver's wish.
+  ///
+  /// "This is a bubble the driver wants" is stored twice: in the app's
+  /// preferences (via [show]/[hide]) and in the service's own copy, which is
+  /// what lets a reboot, an update or a sticky restart put the bubble back with
+  /// no Dart involved. The two can drift apart, and the drift is invisible — a
+  /// bubble on screen with nothing computing behind it looks exactly like a
+  /// working speedometer reading 0. A cold start therefore reads both stores.
+  Future<bool> isDesired() async {
+    if (!isSupported) return false;
+    try {
+      final bool? desired = await _methods.invokeMethod<bool>('isDesired');
+      return desired ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> refreshRunningState() async {
     if (!isSupported) return false;
     try {
@@ -186,6 +204,39 @@ class OverlayService {
     await _eventSub?.cancel();
     await _events.close();
   }
+}
+
+/// What a cold start should do about the bubble — and therefore about the
+/// radar pipeline that feeds it.
+///
+/// The decision is a free function on purpose: it is the whole rule about two
+/// stores that must never disagree, so it lives where it can be read and tested
+/// on its own instead of as an `if` buried in the bootstrap.
+enum BackgroundResume {
+  /// Nobody wants a bubble: the driver never switched it on, or he switched it
+  /// off from the lock screen. Leave both the window and the pipeline alone.
+  none,
+
+  /// The preference says the radar should be running. Make it so — bring the
+  /// bubble back if the window is gone and arm the pipeline behind it.
+  arm,
+
+  /// A bubble is on screen that the preference has never heard about — what a
+  /// lock-screen stop, an update or a process death leaves behind. The driver
+  /// can *see* the bubble, so he means it: adopt the native answer and arm the
+  /// pipeline, rather than leaving a dial on the lock screen that computes
+  /// nothing.
+  adopt,
+}
+
+/// Reconciles the two stores into one instruction. See [BackgroundResume].
+BackgroundResume decideBackgroundResume({
+  required bool prefEnabled,
+  required bool nativeDesired,
+}) {
+  if (!prefEnabled && !nativeDesired) return BackgroundResume.none;
+  if (nativeDesired && !prefEnabled) return BackgroundResume.adopt;
+  return BackgroundResume.arm;
 }
 
 /// Things the user does *on the bubble itself*, delivered back to Dart.

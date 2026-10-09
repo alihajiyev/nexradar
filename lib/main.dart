@@ -126,9 +126,13 @@ class AppServices {
     // swiped away, or a sticky restart after process death — has to put the
     // radar pipeline back to work by itself, because by then the driver is
     // already on the road.
-    if (settings.overlayEnabled) {
-      unawaited(resumeInBackground());
-    }
+    //
+    // Always asked, never gated on the preference here: "should this process be
+    // driving?" is decided in one place, from both stores (see
+    // [resumeInBackground]), and a bubble that is already on screen counts as a
+    // yes even when the preference says nothing — otherwise the driver gets a
+    // lock screen that shows a dial computing nothing.
+    unawaited(resumeInBackground());
 
     // A cold start is the natural moment to look for a new build: the driver is
     // stationary, the screen is on, and a failure costs nothing.
@@ -213,7 +217,13 @@ class AppServices {
       return false;
     }
 
+    // Either grant can carry the bubble: "display over other apps" for the
+    // ordinary window, and the accessibility grant for the lock-screen host,
+    // which is the window the keyguard cannot hide. Asking for the overlay grant
+    // when the driver has already given the other one would send him to a
+    // settings page he does not need.
     final bool granted = await overlay.hasOverlayPermission() ||
+        await overlay.lockHudEnabled() ||
         await overlay.requestOverlayPermission();
     if (!granted) {
       lastNotice.value =
@@ -222,6 +232,14 @@ class AppServices {
       return false;
     }
 
+    // The bubble and the radar are one switch in the driver's head: a dial that
+    // floats over the map showing a frozen 0 km/s is indistinguishable from a
+    // dead app, and on the lock screen it is the *only* thing he can look at.
+    // Turning the bubble on therefore arms the pipeline behind it — which is
+    // what the lock-screen panel reports from, so "it works on the lock screen"
+    // no longer depends on having pressed the right one of two buttons.
+    final bool armed = await _armRadar();
+
     final bool shown = await overlay.show(
       scale: settings.overlayScale,
       showRemaining: settings.showRemaining,
@@ -229,8 +247,24 @@ class AppServices {
     await settings.setOverlayEnabled(shown);
     if (!shown) {
       lastNotice.value = 'Baloncuk başladıla bilmədi.';
+    } else if (!armed) {
+      lastNotice.value =
+          'Baloncuk açıqdır, amma radar dayanır: konum izni lazımdır.';
     }
     return shown;
+  }
+
+  /// Starts the radar pipeline if it is not running, and says whether it is up.
+  ///
+  /// Separate from [startDriving] because the caller already knows what it is
+  /// turning on: this only reports the one reason it cannot start — the location
+  /// grant — so the driver gets a sentence he can act on instead of a silent
+  /// bubble that shows nothing.
+  Future<bool> _armRadar() async {
+    if (engine.isRunning) return true;
+    if (!await locationService.hasPermission()) return false;
+    await engine.start(background: true);
+    return engine.isRunning;
   }
 
   /// Puts the radar pipeline back to work without any UI attached.
@@ -239,9 +273,28 @@ class AppServices {
   /// (permission revoked while the app was closed, GPS off) is silent by design
   /// — there is nobody to show a snackbar to.
   Future<void> resumeInBackground() async {
-    if (!settings.overlayEnabled) return;
+    await overlay.refreshRunningState();
+
+    // Whether the radar should be running is recorded twice — in the app's
+    // preferences and in the native service, which keeps its own copy so a
+    // reboot can restore the bubble on its own. A process death, an update or a
+    // stop from the lock screen can leave the two disagreeing, and the result is
+    // the worst possible state: a bubble on the lock screen that computes
+    // nothing, which a driver reads as "the app closed". So both stores are
+    // consulted, and [BackgroundResume.adopt] trusts the bubble he can see.
+    final BackgroundResume intent = decideBackgroundResume(
+      prefEnabled: settings.overlayEnabled,
+      nativeDesired: await overlay.isDesired(),
+    );
+    if (intent == BackgroundResume.none) return;
+
     try {
-      await overlay.refreshRunningState();
+      if (intent == BackgroundResume.adopt) {
+        await settings.setOverlayEnabled(true);
+      }
+      // A bubble with no fix is honest only while there is somewhere to get one.
+      // The grant is checked here rather than at the switch because it can be
+      // revoked between two launches.
       if (!await locationService.hasPermission()) return;
       if (!engine.isRunning) await engine.start(background: true);
       if (!overlay.isRunning) {

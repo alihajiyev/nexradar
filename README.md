@@ -463,7 +463,7 @@ həmin versiya üçün GitHub Release yoxdursa APK-nı derləyib `v<sürüm>` te
 
 ```bash
 # Yeganə addım: versiyanı qaldır və push et
-#   pubspec.yaml: version: 1.5.0+6
+#   pubspec.yaml: version: 1.5.1+7
 git commit -am "chore: bump version"
 git push
 ```
@@ -632,10 +632,53 @@ Sessions Stack - have 1 sessions:
   `android.shortCriticalText=SÜKUT` (Android 16), sessiya isə `PAUSED(2)` oldu — yəni
   kilid ekranındaki düymə "play"a çevrilir və sürücü sükutu bir toxunuşla aça bilir.
 
-**Yoxlanıla bilməyən:** kilid ekranının *rəsmi görüntüsü* — imicdə kilid ekranı heç
-qurulmamışdır (`isKeyguardShowing=false`), ona görə panelin keyguard-da necə çəkildiyi
-burada təsdiqlənmədi. Yuxarıdaki iki siyahı isə onun bütün **girdilərinin** (MediaSession
-+ MediaStyle + token + metadata + short critical text) sistemdə hazır olduğunu göstərir.
+**Yoxlanıla bilməyən:** kilid ekranının *rəsmi görüntüsü* — o sessiyada imicdə kilid
+ekranı heç qurulmamışdı (`isKeyguardShowing=false`). Bu boşluq v1.5.1-də bağlandı
+(aşağıya bax): PIN qoyulub kilid ekranı işə salındı və panelin keyguard üzərində
+çəkildiyi **ekran görüntüsü ilə** təsdiqləndi.
+
+### v1.5.1 — baloncuk və radar: bir açar (kilit ekranında ölçülüb)
+
+Kilid ekranı bu dəfə **gerçək keyguard üzərində** yoxlanıldı: imicə PIN qoyuldu
+(`locksettings set-pin`), ekran bağlanıb açıldı, tətbiq arxa fonda qaldı
+(`mKeyguardOccluded=false`, `KeyguardStateMonitor mIsShowing=true`) və ekran
+çəkilişində hər iki səth kilid ekranının üstündə göründü:
+
+* sürət kadranı — `0 km/s` + `KM/S` çipi + `+` düyməsi — saatın yanında;
+* media kartı — `NexRadar aktivdir`, ⏸/⏮/⏭/⏹ düymələri və kadran artwork-ü.
+
+**Tapılan real xəta.** Cihazın öz uçuş qeydi (`files/session.log`) bir prosesdə
+`overlay|window attached` və `lockHud|bubble attached over the keyguard` sətirlərini
+yazdığı halda `engine|started` və `hb` (kalp atışı) sətirlərini **heç yazmamışdı** —
+yəni baloncuk ekranda idi, arxasında isə heç nə hesablanmırdı. Səbəb: *"baloncuk
+açıqdır"* və *"radar işləyir"* iki ayrı açar idi:
+
+* `setOverlayEnabled` yalnız pəncərəni göstərirdi, mühərriki başlatmırdı — onu
+  yalnız əsas ekranın böyük düyməsi (`startDriving`) başladırdı;
+* "baloncuk istənilir" iki yerdə saxlanılırdı (Dart seçimi + native `desired`
+  bayrağı) və proses ölümü, yeniləmə və ya kilid ekranından "Dayandır" onları
+  bir-birindən ayıra bilirdi.
+
+Nəticə sürücü üçün ən pis hal idi: **kilid ekranında ölü kadran** — canlı 0 km/s-dən
+seçilməyən, xəbərdarlıq etməyən, yəni "tətbiq bağlanıb" görünən vəziyyət. Düzəlişlər:
+
+1. Baloncuğu yandırmaq **radarı da işə salır** (konum icazəsi yoxdursa, banner bunu
+   açıq deyir); baloncuk üçün iki icazədən biri bəs edir — erişilebilirlik icazəsi
+tək başına verilibsə, artıq "digər tətbiqlər üzərində" səhifəsinə göndərilmir.
+2. Soyuq başlanğıc iki qeydi bir yerdə uzlaşdırır (`decideBackgroundResume`):
+   seçim varsa → `arm`, yalnız ekranda baloncuk varsa → `adopt` (sürücü onu görür,
+   deməli istəyir), heç biri yoxsa → heç nə. Qərar sınaqdan keçir (5 test).
+3. Kilid ekranından "Dayandır" artıq `desired=false`-u **yazır**: sürücünün
+tək özü söndürdüyü baloncuk reboot/yeniləmə/"sticky restart"dan sonra dirilmir.
+4. Panel ilk payload gələnə qədər saxta canlı mətn yerine `GPS gözlənilir` yazır.
+
+| Yoxlama | Nəticə |
+|---|---|
+| `flutter analyze` | **No issues found** |
+| `flutter test --exclude-tags golden` | **121/121** (5 yeni) |
+| Kilit ekranı HUD + media kartı | keyguard üzərində çəkilib (ekran görüntüsü) |
+| Bozuk vəziyyətdən soyuq başlanğıc | `overlay_enabled=false` + `desired=true` → uçuş qeydində `engine|started (background: true)` + kalp atışları |
+| Kilid ekranı düymələri | `actions=560`, `category=transport`, `vis=PUBLIC`, `MediaStyle` + token |
 
 ---
 
@@ -649,5 +692,5 @@ burada təsdiqlənmədi. Yuxarıdaki iki siyahı isə onun bütün **girdilərin
 Bitmiş addımlar: kilid ekranı HUD (erişilebilirlik host-u + publik bildiriş kartı),
 sabit 5 km radar ufqu, tətbiq daxilində yeniləmə və GitHub Releases boru xətti,
 kilid ekranı media paneli (pauza/səs/bildir düymələri, canlı kadran artwork-ü) və
-müddətli sükut rejimi,
+müddətli sükut rejimi, baloncuk ↔ radar tək açarı və iki qeydin uzlaşdırılması,
 `Inter`/`InterDisplay` dizayn sistemi.

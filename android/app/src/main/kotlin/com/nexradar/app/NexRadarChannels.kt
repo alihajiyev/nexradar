@@ -150,6 +150,13 @@ object NexRadarChannels {
 
             "isRunning" -> result.success(RadarOverlayService.isRunning)
 
+            // What the *native* side still believes about the driver's wish. The
+            // Dart preference and this flag are two stores that a process death,
+            // an update or a lock-screen stop can drift apart; the app reads this
+            // one on a cold start so a bubble that is already on screen can never
+            // sit there with a dead pipeline behind it.
+            "isDesired" -> result.success(BubbleWindow.isDesired(context))
+
             // ------------------------------------------------ lock-screen HUD
 
             "lockHudEnabled" -> result.success(lockHudEnabled(context))
